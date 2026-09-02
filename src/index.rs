@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use serde::Serialize;
@@ -11,6 +10,7 @@ use crate::config::ScanConfig;
 use crate::rollout::{
     discover_rollouts, is_archived_path, read_session_meta, RolloutError, RolloutSessionMeta,
 };
+use crate::workspace_rule::normalize_workspace_path;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct WorkspaceLookup {
@@ -137,22 +137,7 @@ fn compare_system_times(left: Option<SystemTime>, right: Option<SystemTime>) -> 
 }
 
 fn normalize_workspace(path: &Path) -> PathBuf {
-    if let Ok(canonical) = fs::canonicalize(path) {
-        return canonical;
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
+    normalize_workspace_path(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]

@@ -109,7 +109,9 @@ and does not modify Codex live files.
 Start the loopback route using the current stored provider:
 
 ```bash
-cargo run -- route serve --data-dir /path/to/data
+cargo run -- route serve \
+  --data-dir /path/to/data \
+  --codex-home "$HOME/.codex"
 ```
 
 The route listens on `http://127.0.0.1:16729` and accepts Codex
@@ -123,9 +125,29 @@ the route root. Point Codex's active provider `base_url` at
 The route injects the credential from the local provider database and binds to
 loopback only. `/v1/models` returns an empty Codex-compatible model catalog
 until model-catalog projection is implemented. `/v1/responses/compact` is a
-transparent upstream passthrough. This milestone forwards only the native
-Responses protocol; it does not translate Chat Completions or Anthropic
-requests, write Codex live files, or perform retries/failover.
+transparent upstream passthrough. When `--provider` is omitted, the route
+selects a provider using the request's Codex session and workspace route rules.
+The route scans a bounded rollout prefix per request so sessions created after
+startup can be resolved without restarting the server. This milestone forwards
+only the native Responses protocol; it does not translate Chat Completions or
+Anthropic requests, write Codex live files, or perform retries/failover.
+
+Manage workspace route rules from the CLI:
+
+```bash
+cargo run -- route rule add \
+  --data-dir /path/to/data \
+  --workspace /path/to/project \
+  --provider provider-a
+
+cargo run -- route rule list --data-dir /path/to/data
+cargo run -- route rule remove \
+  --data-dir /path/to/data \
+  --workspace /path/to/project
+```
+
+Adding an existing workspace requires `--replace`. Rules store normalized
+absolute paths and can reference only providers already in the local store.
 
 ## Selection Rules
 
@@ -134,14 +156,17 @@ requests, write Codex live files, or perform retries/failover.
 - If records contain multiple workspaces, the oldest valid `session_meta` workspace is selected as `workspace` and all candidates are listed in `workspaces`.
 - Existing paths are canonicalized; missing paths are returned as normalized absolute paths with `workspace_exists: false`.
 - Malformed rollout lines are ignored. Prompt and conversation records are never read after the first usable `session_meta`.
+- Route provider precedence is `--provider` > exact workspace rule > current provider.
+- Requests without a usable session, unknown sessions, conflicting workspace metadata, missing workspaces, or unreadable rollout indexes fall back to the current provider.
 
 ## Scope Boundary
 
-This milestone does not read `state_5.sqlite`, watch for session changes, parse
-`X-Codex-Turn-Metadata`, proxy WebSocket traffic, or infer parent workspaces
-from `forked_from_thread_id`. Each command invocation builds a fresh read-only
-snapshot. The lookup library is separated from the CLI so the route can reuse
-the provider store directly.
+This milestone does not read `state_5.sqlite`, run a background session watcher,
+parse `X-Codex-Turn-Metadata`, proxy WebSocket traffic, or infer parent
+workspaces from `forked_from_thread_id`. Each routed request builds a fresh
+bounded read-only snapshot. The lookup library is separated from the CLI so
+the route can reuse the provider store directly. There is no UI in this MVP
+slice.
 
 Exit codes are stable for automation:
 

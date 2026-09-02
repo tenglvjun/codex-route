@@ -23,7 +23,7 @@ TOML, Clap, existing rollout/index modules.
 - Provider selection precedence is `--provider` > exact normalized workspace rule > current provider.
 - Unknown sessions, missing workspaces, conflicting workspace metadata, malformed request JSON, and scan failures fall back to the current provider.
 - `previous_response_id` is never used as a session identity.
-- Rules store normalized absolute paths and may reference only an existing provider when created.
+- Rules store normalized absolute paths and may reference only an existing provider when created; this slice does not expose provider deletion.
 - Do not add UI, Chat/Anthropic conversion, OAuth, retries/failover, or Codex live-file writes.
 - Run focused tests after each task and the complete `cargo test --locked`, fmt check, and clippy check before finishing.
 
@@ -93,7 +93,7 @@ git commit -m "feat: persist workspace route rules"
 
 **Interfaces:**
 - Consumes `normalize_workspace_path` and the new `ProviderStore` rule APIs.
-- Produces `RouteState::with_scan_config(store, provider_id, codex_home, max_rollout_bytes)`.
+- Produces `RouteState::with_scan_config(store, provider_id, scan_config)`.
 - Produces `extract_codex_session_id(&HeaderMap, &Value) -> Option<String>`.
 
 - [ ] **Step 1: Add failing routing integration tests**

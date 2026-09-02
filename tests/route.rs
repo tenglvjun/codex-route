@@ -4,6 +4,7 @@ use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use axum::routing::post;
 use axum::Router;
+use codex_route::config::ScanConfig;
 use codex_route::provider::{Provider, ProviderSource};
 use codex_route::provider_store::ProviderStore;
 use codex_route::route::{
@@ -157,9 +158,15 @@ fn dynamic_route_state(
     for provider in providers {
         store.insert(provider).unwrap();
     }
-    let state =
-        RouteState::with_scan_config(store.clone(), None, codex_home.to_path_buf(), 64 * 1024)
-            .unwrap();
+    let state = RouteState::with_scan_config(
+        store.clone(),
+        None,
+        ScanConfig {
+            codex_home: codex_home.to_path_buf(),
+            max_rollout_bytes: 64 * 1024,
+        },
+    )
+    .unwrap();
     (state, store)
 }
 
@@ -234,6 +241,8 @@ async fn routes_session_workspace_to_rule_provider_and_falls_back_to_current() {
         Some("responses"),
         Some("key-b"),
     );
+    let mut provider_b = provider_b;
+    provider_b.is_current = false;
     let (state, store) = dynamic_route_state(&directory, &[provider_a, provider_b], home.path());
     store
         .upsert_route_rule(&workspace_a, "provider-a", false)
@@ -313,6 +322,8 @@ async fn fixed_provider_overrides_workspace_route() {
         Some("responses"),
         Some("fixed-key"),
     );
+    let mut fixed = fixed;
+    fixed.is_current = false;
     let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
     store.insert(&current).unwrap();
     store.insert(&fixed).unwrap();
@@ -322,8 +333,10 @@ async fn fixed_provider_overrides_workspace_route() {
     let state = RouteState::with_scan_config(
         store,
         Some("fixed".to_string()),
-        home.path().to_path_buf(),
-        64 * 1024,
+        ScanConfig {
+            codex_home: home.path().to_path_buf(),
+            max_rollout_bytes: 64 * 1024,
+        },
     )
     .unwrap();
     let (route_address, route_task) = spawn_router(build_router(state)).await;
@@ -382,6 +395,8 @@ async fn conflicting_or_missing_workspaces_fall_back_to_current_provider() {
         Some("responses"),
         Some("mapped-key"),
     );
+    let mut mapped = mapped;
+    mapped.is_current = false;
     let (state, store) = dynamic_route_state(&directory, &[current, mapped], home.path());
     store
         .upsert_route_rule(&workspace_a, "mapped", false)
@@ -411,6 +426,50 @@ async fn conflicting_or_missing_workspaces_fall_back_to_current_provider() {
     route_task.abort();
     current_task.abort();
     mapped_task.abort();
+}
+
+#[tokio::test]
+async fn matching_rule_provider_configuration_errors_are_not_silently_skipped() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_rollout(home.path(), "session-a", "thread-a", &workspace);
+
+    let directory = TempDir::new().unwrap();
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-key"),
+    );
+    current.is_current = true;
+    let mut invalid = provider(
+        "invalid",
+        "https://invalid.example/v1",
+        Some("chat"),
+        Some("invalid-key"),
+    );
+    invalid.is_current = false;
+    let (state, store) = dynamic_route_state(&directory, &[current, invalid], home.path());
+    store
+        .upsert_route_rule(&workspace, "invalid", false)
+        .unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .header("session_id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "responses_only"
+    );
+
+    route_task.abort();
 }
 
 #[test]

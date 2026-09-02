@@ -27,8 +27,7 @@ pub struct RouteState {
     pub(crate) store: Arc<ProviderStore>,
     pub(crate) provider_id: Option<String>,
     pub(crate) client: reqwest::Client,
-    codex_home: Option<PathBuf>,
-    max_rollout_bytes: u64,
+    scan_config: Option<ScanConfig>,
 }
 
 impl RouteState {
@@ -43,20 +42,17 @@ impl RouteState {
             store,
             provider_id,
             client,
-            codex_home: None,
-            max_rollout_bytes: 0,
+            scan_config: None,
         })
     }
 
     pub fn with_scan_config(
         store: Arc<ProviderStore>,
         provider_id: Option<String>,
-        codex_home: PathBuf,
-        max_rollout_bytes: u64,
+        scan_config: ScanConfig,
     ) -> Result<Self, RouteStartupError> {
         let mut state = Self::new(store, provider_id)?;
-        state.codex_home = Some(codex_home);
-        state.max_rollout_bytes = max_rollout_bytes;
+        state.scan_config = Some(scan_config);
         Ok(state)
     }
 
@@ -105,9 +101,7 @@ impl RouteState {
                     .get(&rule.provider_id)
                     .map_err(|_| RouteRequestError::ProviderUnavailable)?
                 {
-                    if provider_configuration(&provider).is_ok() {
-                        return Ok(provider);
-                    }
+                    return Ok(provider);
                 }
             }
         }
@@ -126,12 +120,8 @@ impl RouteState {
         body: Option<&Value>,
     ) -> Option<PathBuf> {
         let session_id = extract_codex_session_id(headers, body?)?;
-        let codex_home = self.codex_home.as_ref()?;
-        let config = ScanConfig {
-            codex_home: codex_home.clone(),
-            max_rollout_bytes: self.max_rollout_bytes,
-        };
-        let index = SessionWorkspaceIndex::build(&config).ok()?;
+        let config = self.scan_config.as_ref()?;
+        let index = SessionWorkspaceIndex::build(config).ok()?;
         let lookup = index.resolve(&session_id).ok()?;
         if lookup.conflicting_workspaces || !lookup.workspace_exists {
             return None;
@@ -317,11 +307,20 @@ async fn forward_endpoint(
     endpoint: &str,
 ) -> Result<Response<Body>, RouteRequestError> {
     let (parts, body) = request.into_parts();
-    let body = to_bytes(body, 64 * 1024 * 1024)
-        .await
-        .map_err(|_| RouteRequestError::RequestBody)?;
-    let body_json = serde_json::from_slice::<Value>(&body).ok();
-    let provider = state.selected_provider(&parts.headers, body_json.as_ref())?;
+    let (provider, request_body) = if state.provider_id.is_some() {
+        let provider = state.selected_provider(&parts.headers, None)?;
+        let body_stream = body
+            .into_data_stream()
+            .map_err(|error| std::io::Error::other(error.to_string()));
+        (provider, reqwest::Body::wrap_stream(body_stream))
+    } else {
+        let body = to_bytes(body, 64 * 1024 * 1024)
+            .await
+            .map_err(|_| RouteRequestError::RequestBody)?;
+        let body_json = serde_json::from_slice::<Value>(&body).ok();
+        let provider = state.selected_provider(&parts.headers, body_json.as_ref())?;
+        (provider, reqwest::Body::from(body))
+    };
     let (base_url, credential) = provider_configuration(&provider)?;
     let url = upstream_endpoint_url(&base_url, endpoint, parts.uri.query())?;
     let headers = filter_request_headers(&parts.headers, Some(&credential))?;
@@ -329,7 +328,7 @@ async fn forward_endpoint(
         .client
         .post(url)
         .headers(headers)
-        .body(body)
+        .body(request_body)
         .send()
         .await
         .map_err(|_| RouteRequestError::Upstream)?;

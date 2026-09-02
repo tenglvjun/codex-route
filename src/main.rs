@@ -234,12 +234,7 @@ fn run_route_command(args: RouteArgs) -> Result<(), CliError> {
 fn run_route_serve(args: RouteServeArgs) -> Result<(), CliError> {
     let store = Arc::new(open_provider_store(args.data_dir)?);
     let scan = ScanConfig::from_cli(args.scan.codex_home, args.scan.max_rollout_bytes)?;
-    let state = route::RouteState::with_scan_config(
-        store,
-        args.provider,
-        scan.codex_home,
-        scan.max_rollout_bytes,
-    )?;
+    let state = route::RouteState::with_scan_config(store, args.provider, scan)?;
     state.validate_selection()?;
     eprintln!("listening on 127.0.0.1:{}", args.port);
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -274,7 +269,13 @@ fn run_route_rule_command(args: RouteRuleArgs) -> Result<(), CliError> {
         }
         RouteRuleCommand::Remove(args) => {
             let store = open_provider_store(args.data_dir)?;
-            let rule = store.remove_route_rule(&args.workspace)?;
+            let rule = match store.remove_route_rule(&args.workspace) {
+                Ok(rule) => rule,
+                Err(ProviderStoreError::RouteRuleNotFound(path)) => {
+                    return Err(CliError::RouteRuleNotFound(path));
+                }
+                Err(error) => return Err(error.into()),
+            };
             write_json(&rule)
         }
     }

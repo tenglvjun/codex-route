@@ -25,10 +25,10 @@ normalized workspace. Each row stores:
 Rules are unique by workspace. Adding a rule replaces the existing rule for
 that workspace only when the command explicitly requests replacement; otherwise
 the command reports a conflict. A rule can only reference an existing provider.
-Deleting a provider does not silently delete rules; route selection treats a
-rule whose provider is missing as unavailable and falls back to the current
-provider. The rule remains visible in `route rule list` so it can be repaired
-or removed explicitly.
+This slice does not expose provider deletion. If a rule points to a provider
+row that is absent due to external database maintenance, route selection treats
+it as unavailable and falls back to the current provider; the rule remains
+visible in `route rule list` so it can be repaired or removed explicitly.
 
 ## Request Flow
 

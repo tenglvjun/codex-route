@@ -58,7 +58,10 @@ mod tests {
         fs::create_dir(&nested).unwrap();
         let path = nested.join("..").join("nested");
 
-        assert_eq!(normalize_workspace_path(&path).unwrap(), nested);
+        assert_eq!(
+            normalize_workspace_path(&path).unwrap(),
+            fs::canonicalize(nested).unwrap()
+        );
     }
 
     #[test]

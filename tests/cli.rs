@@ -2,8 +2,11 @@ use std::fs;
 use std::path::Path;
 
 use assert_cmd::prelude::*;
+use codex_route::provider::{Provider, ProviderSource};
+use codex_route::provider_store::ProviderStore;
 use predicates::prelude::*;
 use rusqlite::{params, Connection};
+use serde_json::json;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -53,6 +56,129 @@ fn route_help_exposes_responses_server_options() {
         .success()
         .stdout(predicate::str::contains("16729"))
         .stdout(predicate::str::contains("--provider"));
+}
+
+#[test]
+fn route_rule_commands_manage_workspace_rules() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let store = ProviderStore::open(data_dir.path().join("codex-route.db")).unwrap();
+    store
+        .insert(&Provider {
+            id: "provider-a".to_string(),
+            name: "Provider A".to_string(),
+            settings_config: json!({
+                "auth": {"OPENAI_API_KEY": "sk-test"},
+                "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://example.test/v1\""
+            }),
+            website_url: None,
+            category: None,
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            icon: None,
+            icon_color: None,
+            meta: json!({}),
+            in_failover_queue: false,
+            is_current: true,
+            source: ProviderSource::Local,
+        })
+        .unwrap();
+    let workspace = data_dir.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let data_text = data_dir.path().to_str().unwrap();
+    let workspace_text = workspace.to_str().unwrap();
+
+    Command::cargo_bin("codex-route")
+        .unwrap()
+        .args(["route", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rule"));
+
+    let add = Command::cargo_bin("codex-route")
+        .unwrap()
+        .args([
+            "route",
+            "rule",
+            "add",
+            "--data-dir",
+            data_text,
+            "--workspace",
+            workspace_text,
+            "--provider",
+            "provider-a",
+        ])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+    let added: serde_json::Value = serde_json::from_slice(&add.stdout).unwrap();
+    assert_eq!(added["action"], "inserted");
+    assert_eq!(added["rule"]["providerId"], "provider-a");
+
+    Command::cargo_bin("codex-route")
+        .unwrap()
+        .args([
+            "route",
+            "rule",
+            "add",
+            "--data-dir",
+            data_text,
+            "--workspace",
+            workspace_text,
+            "--provider",
+            "provider-a",
+        ])
+        .assert()
+        .failure();
+
+    let replace = Command::cargo_bin("codex-route")
+        .unwrap()
+        .args([
+            "route",
+            "rule",
+            "add",
+            "--data-dir",
+            data_text,
+            "--workspace",
+            workspace_text,
+            "--provider",
+            "provider-a",
+            "--replace",
+        ])
+        .output()
+        .unwrap();
+    assert!(replace.status.success());
+    let replaced: serde_json::Value = serde_json::from_slice(&replace.stdout).unwrap();
+    assert_eq!(replaced["action"], "replaced");
+
+    let list = Command::cargo_bin("codex-route")
+        .unwrap()
+        .args(["route", "rule", "list", "--data-dir", data_text])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let rules: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(rules.as_array().unwrap().len(), 1);
+    assert_eq!(rules[0]["providerId"], "provider-a");
+
+    let remove = Command::cargo_bin("codex-route")
+        .unwrap()
+        .args([
+            "route",
+            "rule",
+            "remove",
+            "--data-dir",
+            data_text,
+            "--workspace",
+            workspace_text,
+        ])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&remove.stdout).unwrap()["providerId"],
+        "provider-a"
+    );
 }
 
 #[test]

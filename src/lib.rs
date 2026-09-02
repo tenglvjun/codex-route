@@ -6,3 +6,4 @@ pub mod provider;
 pub mod provider_store;
 pub mod rollout;
 pub mod route;
+pub mod workspace_rule;

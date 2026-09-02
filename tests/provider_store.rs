@@ -3,6 +3,7 @@ use codex_route::provider::{Provider, ProviderSource};
 use codex_route::provider_store::{ProviderStore, UpsertOutcome};
 use codex_route::provider_store::{ProviderStoreError, UpsertRouteRuleOutcome};
 use codex_route::workspace_rule::{normalize_workspace_path, WorkspacePathError};
+use rusqlite::Connection;
 use serde_json::json;
 use std::path::Path;
 use tempfile::tempdir;
@@ -195,4 +196,51 @@ fn route_rules_reject_relative_paths() {
             WorkspacePathError::Relative(_)
         ))
     ));
+}
+
+#[test]
+fn existing_schema_v1_is_migrated_with_route_rules_table() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("codex-route.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE providers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                settings_config TEXT NOT NULL,
+                website_url TEXT,
+                category TEXT,
+                created_at INTEGER,
+                sort_index INTEGER,
+                notes TEXT,
+                icon TEXT,
+                icon_color TEXT,
+                meta TEXT NOT NULL DEFAULT '{}',
+                in_failover_queue INTEGER NOT NULL DEFAULT 0,
+                is_current INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'local',
+                source_id TEXT,
+                source_updated_at INTEGER,
+                imported_at INTEGER NOT NULL
+            );
+            PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = ProviderStore::open(&database).unwrap();
+    store
+        .insert(&provider("provider-a", ProviderSource::Local))
+        .unwrap();
+    store
+        .upsert_route_rule(&directory.path().join("project"), "provider-a", false)
+        .unwrap();
+    assert_eq!(store.list_route_rules().unwrap().len(), 1);
+
+    let connection = Connection::open(&database).unwrap();
+    let version: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
 }

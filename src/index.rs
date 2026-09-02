@@ -156,18 +156,24 @@ mod tests {
 
     use super::*;
 
+    fn fixture_path(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join("codex-route-index-tests")
+            .join(name)
+    }
+
     fn record(
         session_id: &str,
         thread_id: &str,
-        workspace: &str,
+        workspace: &Path,
         timestamp: &str,
     ) -> RolloutSessionMeta {
         RolloutSessionMeta {
             session_id: session_id.to_string(),
             thread_id: thread_id.to_string(),
-            workspace: PathBuf::from(workspace),
+            workspace: workspace.to_path_buf(),
             timestamp: Some(timestamp.to_string()),
-            rollout_path: PathBuf::from(format!("/tmp/{thread_id}.jsonl")),
+            rollout_path: fixture_path(&format!("{thread_id}.jsonl")),
             archived: false,
             modified_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
         }
@@ -175,41 +181,41 @@ mod tests {
 
     #[test]
     fn resolves_same_session_across_threads() {
+        let repo = fixture_path("repo");
         let index = SessionWorkspaceIndex {
             sessions: BTreeMap::from([(
                 "S".to_string(),
                 vec![
-                    record("S", "T1", "/repo", "2026-01-01T00:00:00Z"),
-                    record("S", "T2", "/repo", "2026-01-02T00:00:00Z"),
+                    record("S", "T1", &repo, "2026-01-01T00:00:00Z"),
+                    record("S", "T2", &repo, "2026-01-02T00:00:00Z"),
                 ],
             )]),
         };
 
         let result = index.resolve("S").expect("session should resolve");
-        assert_eq!(result.workspace, PathBuf::from("/repo"));
+        assert_eq!(result.workspace, repo);
         assert_eq!(result.thread_ids, vec!["T1", "T2"]);
-        assert_eq!(result.workspaces, vec![PathBuf::from("/repo")]);
+        assert_eq!(result.workspaces, vec![repo]);
         assert!(!result.conflicting_workspaces);
     }
 
     #[test]
     fn reports_conflicting_workspaces_and_selects_oldest_metadata() {
+        let new_workspace = fixture_path("new");
+        let old_workspace = fixture_path("old");
         let index = SessionWorkspaceIndex {
             sessions: BTreeMap::from([(
                 "S".to_string(),
                 vec![
-                    record("S", "T2", "/new", "2026-01-02T00:00:00Z"),
-                    record("S", "T1", "/old", "2026-01-01T00:00:00Z"),
+                    record("S", "T2", &new_workspace, "2026-01-02T00:00:00Z"),
+                    record("S", "T1", &old_workspace, "2026-01-01T00:00:00Z"),
                 ],
             )]),
         };
 
         let result = index.resolve("S").expect("session should resolve");
-        assert_eq!(result.workspace, PathBuf::from("/old"));
-        assert_eq!(
-            result.workspaces,
-            vec![PathBuf::from("/new"), PathBuf::from("/old")]
-        );
+        assert_eq!(result.workspace, old_workspace);
+        assert_eq!(result.workspaces, vec![new_workspace, old_workspace]);
         assert!(result.conflicting_workspaces);
     }
 

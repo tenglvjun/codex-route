@@ -205,7 +205,13 @@ mod tests {
 
     use super::*;
 
-    fn metadata_line(session_id: &str, thread_id: &str, cwd: &str) -> Vec<u8> {
+    fn fixture_path(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join("codex-route-rollout-tests")
+            .join(name)
+    }
+
+    fn metadata_line(session_id: &str, thread_id: &str, cwd: &Path) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "timestamp": "2026-09-02T12:00:00.000Z",
             "type": "session_meta",
@@ -213,7 +219,7 @@ mod tests {
                 "session_id": session_id,
                 "id": thread_id,
                 "timestamp": "2026-09-02T12:00:00Z",
-                "cwd": cwd,
+                "cwd": cwd.to_string_lossy(),
                 "originator": "codex",
                 "cli_version": "test"
             }
@@ -223,10 +229,12 @@ mod tests {
 
     #[test]
     fn parses_enveloped_session_metadata() {
-        let line = metadata_line("session-1", "thread-1", "/tmp/project");
+        let workspace = fixture_path("project");
+        let rollout = fixture_path("rollout.jsonl");
+        let line = metadata_line("session-1", "thread-1", &workspace);
         let result = read_session_meta_from_reader(
             Box::new(Cursor::new(line)),
-            Path::new("/tmp/rollout.jsonl"),
+            &rollout,
             false,
             64 * 1024,
             None,
@@ -236,17 +244,19 @@ mod tests {
 
         assert_eq!(result.session_id, "session-1");
         assert_eq!(result.thread_id, "thread-1");
-        assert_eq!(result.workspace, PathBuf::from("/tmp/project"));
+        assert_eq!(result.workspace, workspace);
         assert!(!result.archived);
     }
 
     #[test]
     fn skips_invalid_lines_until_metadata() {
         let mut contents = b"not json\n".to_vec();
-        contents.extend(metadata_line("session-1", "thread-1", "/tmp/project"));
+        let workspace = fixture_path("project");
+        let rollout = fixture_path("rollout.jsonl");
+        contents.extend(metadata_line("session-1", "thread-1", &workspace));
         let result = read_session_meta_from_reader(
             Box::new(Cursor::new(contents)),
-            Path::new("/tmp/rollout.jsonl"),
+            &rollout,
             true,
             64 * 1024,
             None,
@@ -259,10 +269,11 @@ mod tests {
 
     #[test]
     fn rejects_relative_workspace_and_oversized_prefix() {
-        let relative = metadata_line("session-1", "thread-1", ".");
+        let rollout = fixture_path("rollout.jsonl");
+        let relative = metadata_line("session-1", "thread-1", Path::new("."));
         assert!(read_session_meta_from_reader(
             Box::new(Cursor::new(relative)),
-            Path::new("/tmp/rollout.jsonl"),
+            &rollout,
             false,
             64 * 1024,
             None,
@@ -274,7 +285,7 @@ mod tests {
         assert!(matches!(
             read_session_meta_from_reader(
                 Box::new(Cursor::new(oversized)),
-                Path::new("/tmp/rollout.jsonl"),
+                &rollout,
                 false,
                 64,
                 None,

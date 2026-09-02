@@ -80,11 +80,17 @@ impl ScanConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
-    fn env(home: &str, codex_home: Option<&str>) -> impl Fn(&str) -> Option<OsString> {
-        let home = OsString::from(home);
-        let codex_home = codex_home.map(OsString::from);
+    fn fixture_path(name: &str) -> PathBuf {
+        env::temp_dir().join("codex-route-config-tests").join(name)
+    }
+
+    fn env(home: &Path, codex_home: Option<&Path>) -> impl Fn(&str) -> Option<OsString> {
+        let home = home.as_os_str().to_os_string();
+        let codex_home = codex_home.map(|path| path.as_os_str().to_os_string());
         move |key| match key {
             "HOME" => Some(home.clone()),
             "CODEX_HOME" => codex_home.clone(),
@@ -94,17 +100,20 @@ mod tests {
 
     #[test]
     fn explicit_home_wins_over_environment() {
+        let explicit = fixture_path("explicit/.codex");
+        let environment = fixture_path("environment");
+        let environment_codex = environment.join(".codex");
         let config = ScanConfig::from_sources(
-            Some(PathBuf::from("/explicit/.codex")),
+            Some(explicit.clone()),
             None,
-            env("/environment", Some("/environment/.codex")),
+            env(&environment, Some(&environment_codex)),
         )
         .expect("configuration should be valid");
 
         assert_eq!(
             config,
             ScanConfig {
-                codex_home: PathBuf::from("/explicit/.codex"),
+                codex_home: explicit,
                 max_rollout_bytes: DEFAULT_MAX_ROLLOUT_BYTES,
             }
         );
@@ -112,37 +121,37 @@ mod tests {
 
     #[test]
     fn environment_home_precedes_default_home() {
-        let config =
-            ScanConfig::from_sources(None, None, env("/default", Some("/environment/.codex")))
-                .expect("configuration should be valid");
+        let default = fixture_path("default");
+        let environment = fixture_path("environment");
+        let environment_codex = environment.join(".codex");
+        let config = ScanConfig::from_sources(None, None, env(&default, Some(&environment_codex)))
+            .expect("configuration should be valid");
 
-        assert_eq!(config.codex_home, PathBuf::from("/environment/.codex"));
+        assert_eq!(config.codex_home, environment_codex);
     }
 
     #[test]
     fn default_home_is_used_when_environment_override_is_absent() {
-        let config = ScanConfig::from_sources(None, None, env("/default", None))
+        let default = fixture_path("default");
+        let config = ScanConfig::from_sources(None, None, env(&default, None))
             .expect("configuration should be valid");
 
-        assert_eq!(config.codex_home, PathBuf::from("/default/.codex"));
+        assert_eq!(config.codex_home, default.join(".codex"));
     }
 
     #[test]
     fn relative_and_invalid_limits_are_rejected() {
+        let home = fixture_path("home");
         assert!(matches!(
-            ScanConfig::from_sources(Some(PathBuf::from(".codex")), None, env("/home/user", None)),
+            ScanConfig::from_sources(Some(PathBuf::from(".codex")), None, env(&home, None)),
             Err(ConfigError::RelativeCodexHome(_))
         ));
         assert!(matches!(
-            ScanConfig::from_sources(None, Some(0), env("/home/user", None)),
+            ScanConfig::from_sources(None, Some(0), env(&home, None)),
             Err(ConfigError::InvalidMaxRolloutBytes(0))
         ));
         assert!(matches!(
-            ScanConfig::from_sources(
-                None,
-                Some(MAX_ALLOWED_ROLLOUT_BYTES + 1),
-                env("/home/user", None)
-            ),
+            ScanConfig::from_sources(None, Some(MAX_ALLOWED_ROLLOUT_BYTES + 1), env(&home, None)),
             Err(ConfigError::InvalidMaxRolloutBytes(_))
         ));
     }

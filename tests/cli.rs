@@ -6,7 +6,7 @@ use predicates::prelude::*;
 use std::process::Command;
 use tempfile::TempDir;
 
-fn write_rollout(home: &Path, session_id: &str, thread_id: &str, cwd: &str) {
+fn write_rollout(home: &Path, session_id: &str, thread_id: &str, cwd: &Path) {
     let directory = home.join("sessions/2026/09/02");
     fs::create_dir_all(&directory).expect("fixture directory should be created");
     let path = directory.join("rollout-cli.jsonl");
@@ -17,7 +17,7 @@ fn write_rollout(home: &Path, session_id: &str, thread_id: &str, cwd: &str) {
             "session_id": session_id,
             "id": thread_id,
             "timestamp": "2026-09-02T12:00:00Z",
-            "cwd": cwd,
+            "cwd": cwd.to_string_lossy(),
             "originator": "codex",
             "cli_version": "test"
         }
@@ -45,7 +45,8 @@ fn help_lists_resolve_command() {
 #[test]
 fn resolve_emits_json_and_not_found_has_exit_code_three() {
     let home = TempDir::new().expect("temporary home should be created");
-    write_rollout(home.path(), "S", "T1", "/repo");
+    let repo = home.path().join("repo");
+    write_rollout(home.path(), "S", "T1", &repo);
 
     let output = Command::cargo_bin("codex-route")
         .expect("binary should be available")
@@ -64,7 +65,7 @@ fn resolve_emits_json_and_not_found_has_exit_code_three() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("successful output should be JSON");
     assert_eq!(value["session_id"], "S");
-    assert_eq!(value["workspace"], "/repo");
+    assert_eq!(value["workspace"], repo.to_string_lossy().as_ref());
 
     let missing = Command::cargo_bin("codex-route")
         .expect("binary should be available")

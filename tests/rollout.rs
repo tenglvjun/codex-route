@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use codex_route::rollout::{discover_rollouts, read_session_meta, RolloutError};
 use tempfile::TempDir;
 
-fn rollout_line(session_id: &str, thread_id: &str, cwd: &str) -> String {
+fn rollout_line(session_id: &str, thread_id: &str, cwd: &Path) -> String {
     serde_json::json!({
         "timestamp": "2026-09-02T12:00:00.000Z",
         "type": "session_meta",
@@ -13,7 +13,7 @@ fn rollout_line(session_id: &str, thread_id: &str, cwd: &str) -> String {
             "session_id": session_id,
             "id": thread_id,
             "timestamp": "2026-09-02T12:00:00Z",
-            "cwd": cwd,
+            "cwd": cwd.to_string_lossy(),
             "originator": "codex",
             "cli_version": "test"
         }
@@ -37,17 +37,18 @@ fn write_plain_rollout(
 #[test]
 fn discovers_active_archived_and_ignores_unrelated_files() {
     let home = TempDir::new().expect("temporary home should be created");
+    let repo = home.path().join("repo");
     write_plain_rollout(
         home.path(),
         "sessions",
         "rollout-active.jsonl",
-        &format!("{}\n", rollout_line("S", "T1", "/repo")),
+        &format!("{}\n", rollout_line("S", "T1", &repo)),
     );
     write_plain_rollout(
         home.path(),
         "archived_sessions",
         "rollout-archived.jsonl",
-        &format!("{}\n", rollout_line("S", "T2", "/repo")),
+        &format!("{}\n", rollout_line("S", "T2", &repo)),
     );
     write_plain_rollout(home.path(), "sessions", "notes.jsonl", "not a rollout\n");
 
@@ -66,19 +67,20 @@ fn discovers_active_archived_and_ignores_unrelated_files() {
 #[test]
 fn reads_plain_and_compressed_metadata() {
     let home = TempDir::new().expect("temporary home should be created");
+    let repo = home.path().join("repo");
     let plain = write_plain_rollout(
         home.path(),
         "sessions",
         "rollout-plain.jsonl",
         &format!(
             "{}\nuser content after metadata\n",
-            rollout_line("S", "T1", "/repo")
+            rollout_line("S", "T1", &repo)
         ),
     );
     let compressed =
         write_plain_rollout(home.path(), "sessions", "rollout-compressed.jsonl.zst", "");
     let compressed_bytes = zstd::stream::encode_all(
-        format!("{}\n", rollout_line("S", "T2", "/repo")).as_bytes(),
+        format!("{}\n", rollout_line("S", "T2", &repo)).as_bytes(),
         3,
     )
     .expect("fixture should compress");
@@ -94,7 +96,7 @@ fn reads_plain_and_compressed_metadata() {
     assert_eq!(plain_meta.session_id, "S");
     assert_eq!(plain_meta.thread_id, "T1");
     assert_eq!(compressed_meta.thread_id, "T2");
-    assert_eq!(compressed_meta.workspace, PathBuf::from("/repo"));
+    assert_eq!(compressed_meta.workspace, repo);
 }
 
 #[test]

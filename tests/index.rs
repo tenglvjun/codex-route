@@ -11,7 +11,7 @@ fn write_rollout(
     name: &str,
     session_id: &str,
     thread_id: &str,
-    cwd: &str,
+    cwd: &Path,
     timestamp: &str,
 ) {
     let directory = codex_home.join(directory).join("2026/09/02");
@@ -24,7 +24,7 @@ fn write_rollout(
             "session_id": session_id,
             "id": thread_id,
             "timestamp": timestamp,
-            "cwd": cwd,
+            "cwd": cwd.to_string_lossy(),
             "originator": "codex",
             "cli_version": "test"
         }
@@ -35,13 +35,15 @@ fn write_rollout(
 #[test]
 fn groups_active_and_archived_threads_by_session() {
     let home = TempDir::new().expect("temporary home should be created");
+    let repo = home.path().join("repo");
+    let other = home.path().join("other");
     write_rollout(
         home.path(),
         "sessions",
         "rollout-a.jsonl",
         "S",
         "T1",
-        "/repo",
+        &repo,
         "2026-01-01T00:00:00Z",
     );
     write_rollout(
@@ -50,7 +52,7 @@ fn groups_active_and_archived_threads_by_session() {
         "rollout-b.jsonl",
         "S",
         "T2",
-        "/repo",
+        &repo,
         "2026-01-02T00:00:00Z",
     );
     write_rollout(
@@ -59,7 +61,7 @@ fn groups_active_and_archived_threads_by_session() {
         "rollout-other.jsonl",
         "OTHER",
         "T3",
-        "/other",
+        &other,
         "2026-01-01T00:00:00Z",
     );
 
@@ -70,22 +72,24 @@ fn groups_active_and_archived_threads_by_session() {
     let index = SessionWorkspaceIndex::build(&config).expect("index should build");
     let result = index.resolve("S").expect("session should resolve");
 
-    assert_eq!(result.workspace, Path::new("/repo"));
+    assert_eq!(result.workspace, repo);
     assert_eq!(result.thread_ids, vec!["T1".to_string(), "T2".to_string()]);
-    assert_eq!(result.workspaces, vec![Path::new("/repo").to_path_buf()]);
+    assert_eq!(result.workspaces, vec![repo]);
     assert!(!result.conflicting_workspaces);
 }
 
 #[test]
 fn reports_conflicting_workspaces_without_guessing_parent_lineage() {
     let home = TempDir::new().expect("temporary home should be created");
+    let repo = home.path().join("repo");
+    let worktree = home.path().join("repo-worktree");
     write_rollout(
         home.path(),
         "sessions",
         "rollout-new.jsonl",
         "S",
         "T2",
-        "/repo-worktree",
+        &worktree,
         "2026-01-02T00:00:00Z",
     );
     write_rollout(
@@ -94,7 +98,7 @@ fn reports_conflicting_workspaces_without_guessing_parent_lineage() {
         "rollout-old.jsonl",
         "S",
         "T1",
-        "/repo",
+        &repo,
         "2026-01-01T00:00:00Z",
     );
 
@@ -107,14 +111,8 @@ fn reports_conflicting_workspaces_without_guessing_parent_lineage() {
         .resolve("S")
         .expect("session should resolve");
 
-    assert_eq!(result.workspace, Path::new("/repo"));
-    assert_eq!(
-        result.workspaces,
-        vec![
-            Path::new("/repo").to_path_buf(),
-            Path::new("/repo-worktree").to_path_buf()
-        ]
-    );
+    assert_eq!(result.workspace, repo);
+    assert_eq!(result.workspaces, vec![repo, worktree]);
     assert!(result.conflicting_workspaces);
 }
 

@@ -136,9 +136,9 @@ before.
 - [ ] **Step 6: Implement provider precedence and rule fallback**
 
 Resolve the fixed provider first. Otherwise load the rule target by provider ID
-only if it exists and has usable configuration; if the rule is stale or invalid,
-select the current provider. Keep existing 503 responses for unavailable or
-invalid selected providers.
+if it exists; if the rule target is stale because the provider row is missing,
+select the current provider. A matching provider with invalid configuration is
+still selected so the existing structured configuration error is returned.
 
 - [ ] **Step 7: Run route tests and commit**
 

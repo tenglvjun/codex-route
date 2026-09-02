@@ -16,7 +16,9 @@ pub struct WorkspaceRouteRule {
     pub workspace: PathBuf,
     #[serde(rename = "providerId")]
     pub provider_id: String,
+    #[serde(rename = "createdAt")]
     pub created_at: i64,
+    #[serde(rename = "updatedAt")]
     pub updated_at: i64,
 }
 

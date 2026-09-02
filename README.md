@@ -106,7 +106,8 @@ and does not modify Codex live files.
 
 ## Local Responses Route
 
-Start the loopback route using the current stored provider:
+Start the loopback route using the current stored provider and optional
+workspace route rules:
 
 ```bash
 cargo run -- route serve \

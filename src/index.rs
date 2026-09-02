@@ -62,6 +62,11 @@ impl SessionWorkspaceIndex {
         Ok(Self { sessions })
     }
 
+    /// Returns every unique session ID in stable lexical order.
+    pub fn session_ids(&self) -> Vec<String> {
+        self.sessions.keys().cloned().collect()
+    }
+
     pub fn resolve(&self, session_id: &str) -> Result<WorkspaceLookup, ResolveError> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
@@ -228,6 +233,22 @@ mod tests {
         assert_eq!(
             index.resolve("missing"),
             Err(ResolveError::SessionNotFound("missing".to_string()))
+        );
+    }
+
+    #[test]
+    fn lists_unique_session_ids_in_order() {
+        let index = SessionWorkspaceIndex {
+            sessions: BTreeMap::from([
+                ("session-b".to_string(), Vec::new()),
+                ("session-a".to_string(), Vec::new()),
+                ("session-b".to_string(), Vec::new()),
+            ]),
+        };
+
+        assert_eq!(
+            index.session_ids(),
+            vec!["session-a".to_string(), "session-b".to_string()]
         );
     }
 }

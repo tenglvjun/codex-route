@@ -135,7 +135,11 @@ enum ProviderConfigError {
 pub fn build_router(state: RouteState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/models", get(models))
+        .route("/v1/models", get(models))
+        .route("/responses/compact", post(responses_compact))
         .route("/v1/responses", post(responses))
+        .route("/v1/responses/compact", post(responses_compact))
         .with_state(state)
 }
 
@@ -152,6 +156,14 @@ pub fn upstream_responses_url(
     base_url: &str,
     query: Option<&str>,
 ) -> Result<reqwest::Url, RouteRequestError> {
+    upstream_endpoint_url(base_url, "/responses", query)
+}
+
+fn upstream_endpoint_url(
+    base_url: &str,
+    endpoint: &str,
+    query: Option<&str>,
+) -> Result<reqwest::Url, RouteRequestError> {
     let mut url = reqwest::Url::parse(base_url).map_err(|_| RouteRequestError::InvalidUrl)?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(RouteRequestError::InvalidUrl);
@@ -159,9 +171,9 @@ pub fn upstream_responses_url(
 
     let path = url.path().trim_end_matches('/');
     let path = if path.is_empty() {
-        "/responses".to_string()
+        endpoint.to_string()
     } else {
-        format!("{path}/responses")
+        format!("{path}{endpoint}")
     };
     url.set_path(&path);
     url.set_query(query);
@@ -191,21 +203,39 @@ async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(json!({"status": "ok"})))
 }
 
+async fn models() -> impl IntoResponse {
+    // Codex probes this endpoint during startup and expects a top-level models
+    // catalog. The MVP does not own a Codex model catalog yet, so return the
+    // same empty catalog shape used by cc-switch when no catalog is active.
+    (StatusCode::OK, axum::Json(json!({"models": []})))
+}
+
 async fn responses(State(state): State<RouteState>, request: Request<Body>) -> Response<Body> {
-    match forward_responses(state, request).await {
+    match forward_endpoint(state, request, "/responses").await {
         Ok(response) => response,
         Err(error) => route_error_response(error),
     }
 }
 
-async fn forward_responses(
+async fn responses_compact(
+    State(state): State<RouteState>,
+    request: Request<Body>,
+) -> Response<Body> {
+    match forward_endpoint(state, request, "/responses/compact").await {
+        Ok(response) => response,
+        Err(error) => route_error_response(error),
+    }
+}
+
+async fn forward_endpoint(
     state: RouteState,
     request: Request<Body>,
+    endpoint: &str,
 ) -> Result<Response<Body>, RouteRequestError> {
     let provider = state.selected_provider()?;
     let (base_url, credential) = provider_configuration(&provider)?;
     let (parts, body) = request.into_parts();
-    let url = upstream_responses_url(&base_url, parts.uri.query())?;
+    let url = upstream_endpoint_url(&base_url, endpoint, parts.uri.query())?;
     let headers = filter_request_headers(&parts.headers, Some(&credential))?;
     let body_stream = body
         .into_data_stream()
@@ -359,7 +389,6 @@ fn is_response_hop_by_hop(name: &axum::http::HeaderName) -> bool {
         name.as_str(),
         "host"
             | "content-length"
-            | "content-encoding"
             | "transfer-encoding"
             | "connection"
             | "te"

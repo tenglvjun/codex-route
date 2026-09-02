@@ -76,6 +76,18 @@ async fn stream_responses() -> Response<Body> {
     response
 }
 
+async fn compressed_stream_response() -> Response<Body> {
+    let mut response = Response::new(Body::from(Bytes::from_static(b"encoded-sse")));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+    response
+}
+
 fn provider(
     id: &str,
     base_url: &str,
@@ -242,8 +254,83 @@ async fn forwards_responses_request_and_replaces_client_credential() {
 }
 
 #[tokio::test]
+async fn forwards_compact_request_to_compact_upstream_path() {
+    let capture = Capture::default();
+    let upstream = Router::new()
+        .route("/v1/responses/compact", post(capture_responses))
+        .with_state(capture.clone());
+    let (upstream_address, upstream_task) = spawn_router(upstream).await;
+
+    let directory = TempDir::new().unwrap();
+    let state = route_state(
+        &directory,
+        provider(
+            "upstream",
+            &format!("http://{upstream_address}/v1/"),
+            Some("responses"),
+            Some("sk-upstream-test"),
+        ),
+    );
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{route_address}/responses/compact?stream=false"
+        ))
+        .header(header::AUTHORIZATION, "Bearer client-secret")
+        .json(&json!({"model": "gpt-5", "input": "compact"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        capture.authorization.lock().unwrap().as_deref(),
+        Some("Bearer sk-upstream-test")
+    );
+    assert_eq!(
+        capture.uri.lock().unwrap().as_deref(),
+        Some("/v1/responses/compact?stream=false")
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&capture.body.lock().unwrap()).unwrap(),
+        json!({"model": "gpt-5", "input": "compact"})
+    );
+
+    route_task.abort();
+    upstream_task.abort();
+}
+
+#[tokio::test]
+async fn serves_codex_models_catalog_shape() {
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let state = RouteState::new(store, None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    for path in ["/models", "/v1/models"] {
+        let response = reqwest::Client::new()
+            .get(format!("http://{route_address}{path}"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "path {path}");
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap(),
+            json!({"models": []}),
+            "path {path}"
+        );
+    }
+
+    route_task.abort();
+}
+
+#[tokio::test]
 async fn passes_sse_bytes_and_health_check() {
-    let upstream = Router::new().route("/v1/responses", post(stream_responses));
+    let upstream = Router::new()
+        .route("/v1/responses", post(stream_responses))
+        .route("/v1/responses/compact", post(stream_responses));
     let (upstream_address, upstream_task) = spawn_router(upstream).await;
     let directory = TempDir::new().unwrap();
     let state = route_state(
@@ -283,6 +370,56 @@ async fn passes_sse_bytes_and_health_check() {
     assert_eq!(
         response.text().await.unwrap(),
         "event: response.created\n\ndata: [DONE]\n\n"
+    );
+
+    let compact_response = client
+        .post(format!("http://{route_address}/v1/responses/compact"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(compact_response.status(), StatusCode::OK);
+    assert_eq!(
+        compact_response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    assert_eq!(
+        compact_response.text().await.unwrap(),
+        "event: response.created\n\ndata: [DONE]\n\n"
+    );
+
+    route_task.abort();
+    upstream_task.abort();
+}
+
+#[tokio::test]
+async fn preserves_content_encoding_for_streaming_response() {
+    let upstream = Router::new().route("/v1/responses", post(compressed_stream_response));
+    let (upstream_address, upstream_task) = spawn_router(upstream).await;
+    let directory = TempDir::new().unwrap();
+    let state = route_state(
+        &directory,
+        provider(
+            "compressed",
+            &format!("http://{upstream_address}/v1"),
+            None,
+            Some("sk-compressed-test"),
+        ),
+    );
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "zstd");
+    assert_eq!(
+        response.bytes().await.unwrap(),
+        Bytes::from_static(b"encoded-sse")
     );
 
     route_task.abort();

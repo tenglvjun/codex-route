@@ -113,14 +113,19 @@ cargo run -- route serve --data-dir /path/to/data
 ```
 
 The route listens on `http://127.0.0.1:16729` and accepts Codex
-`POST /v1/responses` requests. Point Codex's active provider `base_url` at
+`GET /v1/models`, `POST /v1/responses`, and
+`POST /v1/responses/compact` requests. The same endpoints are also available
+without the `/v1` prefix for Codex configurations whose `base_url` points at
+the route root. Point Codex's active provider `base_url` at
 `http://127.0.0.1:16729/v1`. Select a specific stored provider with
 `--provider <id>` or change the current provider in the local store.
 
 The route injects the credential from the local provider database and binds to
-loopback only. This milestone forwards only the native Responses protocol; it
-does not translate Chat Completions or Anthropic requests, write Codex live
-files, or perform retries/failover.
+loopback only. `/v1/models` returns an empty Codex-compatible model catalog
+until model-catalog projection is implemented. `/v1/responses/compact` is a
+transparent upstream passthrough. This milestone forwards only the native
+Responses protocol; it does not translate Chat Completions or Anthropic
+requests, write Codex live files, or perform retries/failover.
 
 ## Selection Rules
 

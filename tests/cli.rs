@@ -9,7 +9,7 @@ use tempfile::TempDir;
 fn write_rollout(home: &Path, session_id: &str, thread_id: &str, cwd: &Path) {
     let directory = home.join("sessions/2026/09/02");
     fs::create_dir_all(&directory).expect("fixture directory should be created");
-    let path = directory.join("rollout-cli.jsonl");
+    let path = directory.join(format!("rollout-cli-{session_id}-{thread_id}.jsonl"));
     let line = serde_json::json!({
         "timestamp": "2026-09-02T12:00:00.000Z",
         "type": "session_meta",
@@ -26,13 +26,14 @@ fn write_rollout(home: &Path, session_id: &str, thread_id: &str, cwd: &Path) {
 }
 
 #[test]
-fn help_lists_resolve_command() {
+fn help_lists_commands() {
     let mut command = Command::cargo_bin("codex-route").expect("binary should be available");
     command
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("resolve"));
+        .stdout(predicate::str::contains("resolve"))
+        .stdout(predicate::str::contains("list"));
 
     Command::cargo_bin("codex-route")
         .expect("binary should be available")
@@ -40,6 +41,32 @@ fn help_lists_resolve_command() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--session-id"));
+}
+
+#[test]
+fn list_emits_unique_sorted_session_ids() {
+    let home = TempDir::new().expect("temporary home should be created");
+    let repo = home.path().join("repo");
+    write_rollout(home.path(), "session-b", "thread-1", &repo);
+    write_rollout(home.path(), "session-a", "thread-1", &repo);
+    write_rollout(home.path(), "session-a", "thread-2", &repo);
+
+    let output = Command::cargo_bin("codex-route")
+        .expect("binary should be available")
+        .args([
+            "list",
+            "--codex-home",
+            home.path()
+                .to_str()
+                .expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("command should run");
+
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("successful output should be JSON");
+    assert_eq!(value, serde_json::json!(["session-a", "session-b"]));
 }
 
 #[test]

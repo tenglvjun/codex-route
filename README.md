@@ -1,8 +1,9 @@
 # codex-route
 
-`codex-route` currently provides a local, read-only utility for resolving a
-Codex `session_id` to the workspace recorded in Codex rollout metadata. This is
-the first milestone of the future workspace-aware LLM gateway.
+`codex-route` currently provides a local, read-only utility for listing Codex
+sessions and resolving a Codex `session_id` to the workspace recorded in Codex
+rollout metadata. This is the first milestone of the future workspace-aware LLM
+gateway.
 
 ## Current MVP
 
@@ -42,6 +43,21 @@ The command emits JSON like:
 }
 ```
 
+To list every unique session ID found in active and archived rollouts:
+
+```bash
+cargo run -- list --codex-home "$HOME/.codex"
+```
+
+The command emits a stable, lexically sorted JSON array:
+
+```json
+[
+  "01a05cdb-cfc1-7853-a2f4-b6047652da9a",
+  "01a05d11-1234-5678-9abc-def012345678"
+]
+```
+
 Codex home resolution is:
 
 ```text
@@ -70,7 +86,7 @@ CLI so a later gateway can reuse it directly.
 Exit codes are stable for automation:
 
 ```text
-0  session resolved
+0  query succeeded
 2  invalid arguments or empty session ID
 3  session ID not found
 4  Codex home, rollout, scan, or output failure

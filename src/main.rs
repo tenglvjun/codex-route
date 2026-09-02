@@ -10,7 +10,7 @@ use codex_route::index::{IndexError, ResolveError, SessionWorkspaceIndex};
 #[command(
     name = "codex-route",
     version,
-    about = "Resolve Codex session IDs to recorded workspaces"
+    about = "Inspect Codex sessions and recorded workspaces"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,19 +21,33 @@ struct Cli {
 enum Command {
     /// Resolve one Codex session ID from local rollout metadata.
     Resolve(ResolveArgs),
+    /// List all unique Codex session IDs from local rollout metadata.
+    List(ListArgs),
 }
 
 #[derive(Debug, Args)]
-struct ResolveArgs {
-    /// Codex session tree identifier.
-    #[arg(long)]
-    session_id: String,
+struct ScanArgs {
     /// Override the Codex home directory.
     #[arg(long)]
     codex_home: Option<PathBuf>,
     /// Maximum decompressed rollout prefix to inspect.
     #[arg(long)]
     max_rollout_bytes: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+struct ResolveArgs {
+    #[command(flatten)]
+    scan: ScanArgs,
+    /// Codex session tree identifier.
+    #[arg(long)]
+    session_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    #[command(flatten)]
+    scan: ScanArgs,
 }
 
 fn main() -> ExitCode {
@@ -49,12 +63,22 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Command::Resolve(args) => {
-            let config = ScanConfig::from_cli(args.codex_home, args.max_rollout_bytes)?;
+            let config = ScanConfig::from_cli(args.scan.codex_home, args.scan.max_rollout_bytes)?;
             let index = SessionWorkspaceIndex::build(&config)?;
             let lookup = index.resolve(&args.session_id)?;
             let stdout = io::stdout();
             let mut handle = stdout.lock();
             serde_json::to_writer_pretty(&mut handle, &lookup).map_err(CliError::Json)?;
+            handle.write_all(b"\n").map_err(CliError::Output)?;
+            Ok(())
+        }
+        Command::List(args) => {
+            let config = ScanConfig::from_cli(args.scan.codex_home, args.scan.max_rollout_bytes)?;
+            let index = SessionWorkspaceIndex::build(&config)?;
+            let session_ids = index.session_ids();
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            serde_json::to_writer_pretty(&mut handle, &session_ids).map_err(CliError::Json)?;
             handle.write_all(b"\n").map_err(CliError::Output)?;
             Ok(())
         }

@@ -70,6 +70,10 @@ fn groups_active_and_archived_threads_by_session() {
         max_rollout_bytes: 64 * 1024,
     };
     let index = SessionWorkspaceIndex::build(&config).expect("index should build");
+    assert_eq!(
+        index.session_ids(),
+        vec!["OTHER".to_string(), "S".to_string()]
+    );
     let result = index.resolve("S").expect("session should resolve");
 
     assert_eq!(result.workspace, repo);

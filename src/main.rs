@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
 use codex_route::cc_switch_import::{CcSwitchImportError, CcSwitchImporter, ConflictPolicy};
@@ -8,6 +9,7 @@ use codex_route::config::{ConfigError, ScanConfig};
 use codex_route::index::{IndexError, ResolveError, SessionWorkspaceIndex};
 use codex_route::provider::ProviderSummary;
 use codex_route::provider_store::{ProviderStore, ProviderStoreError};
+use codex_route::route::{self, RouteStartupError};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -28,6 +30,8 @@ enum Command {
     List(ListArgs),
     /// Manage locally stored Codex upstream providers.
     Provider(ProviderArgs),
+    /// Run the local loopback Responses route.
+    Route(RouteArgs),
 }
 
 #[derive(Debug, Args)]
@@ -45,6 +49,31 @@ enum ProviderCommand {
     /// Import Codex providers from a cc-switch SQLite database.
     #[command(name = "import-cc-switch")]
     ImportCcSwitch(ProviderImportArgs),
+}
+
+#[derive(Debug, Args)]
+struct RouteArgs {
+    #[command(subcommand)]
+    command: RouteCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RouteCommand {
+    /// Serve native Codex Responses requests through a stored provider.
+    Serve(RouteServeArgs),
+}
+
+#[derive(Debug, Args)]
+struct RouteServeArgs {
+    /// Directory containing codex-route.db.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+    /// Provider identifier to use for every request.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Loopback TCP port.
+    #[arg(long, default_value_t = route::DEFAULT_ROUTE_PORT)]
+    port: u16,
 }
 
 #[derive(Debug, Args)]
@@ -137,7 +166,28 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Command::Provider(args) => run_provider_command(args),
+        Command::Route(args) => run_route_command(args),
     }
+}
+
+fn run_route_command(args: RouteArgs) -> Result<(), CliError> {
+    match args.command {
+        RouteCommand::Serve(args) => run_route_serve(args),
+    }
+}
+
+fn run_route_serve(args: RouteServeArgs) -> Result<(), CliError> {
+    let store = Arc::new(open_provider_store(args.data_dir)?);
+    let state = route::RouteState::new(store, args.provider)?;
+    state.validate_selection()?;
+    eprintln!("listening on 127.0.0.1:{}", args.port);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(CliError::Runtime)?;
+    runtime
+        .block_on(route::serve(state, args.port))
+        .map_err(CliError::RouteServe)
 }
 
 fn run_provider_command(args: ProviderArgs) -> Result<(), CliError> {
@@ -266,6 +316,9 @@ enum CliError {
     ProviderStore(ProviderStoreError),
     CcSwitchImport(CcSwitchImportError),
     ProviderNotFound(String),
+    RouteStartup(RouteStartupError),
+    RouteServe(io::Error),
+    Runtime(io::Error),
 }
 
 impl CliError {
@@ -278,7 +331,10 @@ impl CliError {
             | Self::Json(_)
             | Self::Output(_)
             | Self::ProviderStore(_)
-            | Self::CcSwitchImport(_) => 4,
+            | Self::CcSwitchImport(_)
+            | Self::RouteStartup(_)
+            | Self::RouteServe(_)
+            | Self::Runtime(_) => 4,
         }
     }
 }
@@ -294,6 +350,9 @@ impl std::fmt::Display for CliError {
             Self::ProviderStore(error) => error.fmt(formatter),
             Self::CcSwitchImport(error) => error.fmt(formatter),
             Self::ProviderNotFound(id) => write!(formatter, "provider '{id}' was not found"),
+            Self::RouteStartup(error) => error.fmt(formatter),
+            Self::RouteServe(error) => write!(formatter, "route server failed: {error}"),
+            Self::Runtime(error) => write!(formatter, "failed to start route runtime: {error}"),
         }
     }
 }
@@ -327,5 +386,11 @@ impl From<CcSwitchImportError> for CliError {
 impl From<ResolveError> for CliError {
     fn from(error: ResolveError) -> Self {
         Self::Resolve(error)
+    }
+}
+
+impl From<RouteStartupError> for CliError {
+    fn from(error: RouteStartupError) -> Self {
+        Self::RouteStartup(error)
     }
 }

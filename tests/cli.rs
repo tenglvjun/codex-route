@@ -45,6 +45,35 @@ fn help_lists_commands() {
 }
 
 #[test]
+fn route_help_exposes_responses_server_options() {
+    Command::cargo_bin("codex-route")
+        .unwrap()
+        .args(["route", "serve", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("16729"))
+        .stdout(predicate::str::contains("--provider"));
+}
+
+#[test]
+fn route_serve_rejects_missing_current_provider() {
+    let data_dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("codex-route")
+        .unwrap()
+        .args([
+            "route",
+            "serve",
+            "--data-dir",
+            data_dir.path().to_str().unwrap(),
+            "--port",
+            "0",
+        ])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("no current provider"));
+}
+
+#[test]
 fn list_emits_unique_sorted_session_ids() {
     let home = TempDir::new().expect("temporary home should be created");
     let repo = home.path().join("repo");

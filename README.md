@@ -102,7 +102,25 @@ are reported in the JSON result and do not prevent valid rows from importing.
 Repeated imports match the source provider ID. `--on-conflict` accepts
 `skip` (default), `replace`, or `rename`; local-origin rows are never silently
 overwritten. This milestone does not modify Codex `config.toml`/`auth.json`
-and does not proxy requests.
+and does not modify Codex live files.
+
+## Local Responses Route
+
+Start the loopback route using the current stored provider:
+
+```bash
+cargo run -- route serve --data-dir /path/to/data
+```
+
+The route listens on `http://127.0.0.1:16729` and accepts Codex
+`POST /v1/responses` requests. Point Codex's active provider `base_url` at
+`http://127.0.0.1:16729/v1`. Select a specific stored provider with
+`--provider <id>` or change the current provider in the local store.
+
+The route injects the credential from the local provider database and binds to
+loopback only. This milestone forwards only the native Responses protocol; it
+does not translate Chat Completions or Anthropic requests, write Codex live
+files, or perform retries/failover.
 
 ## Selection Rules
 
@@ -115,10 +133,10 @@ and does not proxy requests.
 ## Scope Boundary
 
 This milestone does not read `state_5.sqlite`, watch for session changes, parse
-`X-Codex-Turn-Metadata`, select providers, proxy HTTP/SSE or WebSocket traffic,
-or infer parent workspaces from `forked_from_thread_id`. Each command invocation
-builds a fresh read-only snapshot. The lookup library is separated from the
-CLI so a later gateway can reuse it directly.
+`X-Codex-Turn-Metadata`, proxy WebSocket traffic, or infer parent workspaces
+from `forked_from_thread_id`. Each command invocation builds a fresh read-only
+snapshot. The lookup library is separated from the CLI so the route can reuse
+the provider store directly.
 
 Exit codes are stable for automation:
 

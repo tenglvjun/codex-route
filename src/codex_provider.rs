@@ -49,6 +49,37 @@ pub fn extract_active_base_url(config_text: &str) -> Option<String> {
         .and_then(non_empty)
 }
 
+/// Returns the wire protocol configured for the active Codex model provider.
+///
+/// Codex provider tables are authoritative when `model_provider` selects one;
+/// the top-level value is retained as a compatibility fallback for older
+/// configurations.
+pub fn extract_active_wire_api(config_text: &str) -> Option<String> {
+    let document = config_text.parse::<toml::Value>().ok()?;
+    let active_id = document.get("model_provider").and_then(toml::Value::as_str);
+    if let Some(active_id) = active_id {
+        if let Some(value) = document
+            .get("model_providers")
+            .and_then(|providers| providers.get(active_id))
+            .and_then(|provider| provider.get("wire_api"))
+            .and_then(toml::Value::as_str)
+        {
+            return non_empty(value).map(|value| value.to_ascii_lowercase());
+        }
+    }
+    document
+        .get("wire_api")
+        .and_then(toml::Value::as_str)
+        .and_then(non_empty)
+        .map(|value| value.to_ascii_lowercase())
+}
+
+/// Returns whether a Codex config uses the native Responses protocol.
+/// Missing `wire_api` is the native Responses default.
+pub fn is_responses_wire_api(config_text: &str) -> bool {
+    extract_active_wire_api(config_text).is_none_or(|wire_api| wire_api == "responses")
+}
+
 pub fn extract_codex_api_key(settings: &Value, config_text: Option<&str>) -> Option<String> {
     let auth = settings.get("auth").unwrap_or(settings);
     let from_auth = auth

@@ -67,6 +67,43 @@ Codex home resolution is:
 The default rollout scan limit is 64 KiB per file and can be changed with
 `--max-rollout-bytes` up to 4 MiB.
 
+## Codex Providers
+
+`codex-route` keeps its own provider database at
+`<user config directory>/codex-route/codex-route.db` by default. Use
+`--data-dir` to select another directory. Provider records retain the raw
+Codex `settingsConfig` and cc-switch metadata so a later routing layer can use
+fields that are not yet normalized by this CLI.
+
+List stored providers without printing credentials:
+
+```bash
+cargo run -- provider list --data-dir /path/to/data
+```
+
+Show one provider. Credential fields are replaced with `[REDACTED]` unless
+`--reveal-secrets` is explicitly supplied:
+
+```bash
+cargo run -- provider show custom --data-dir /path/to/data
+cargo run -- provider show custom --data-dir /path/to/data --reveal-secrets
+```
+
+Import only rows whose cc-switch `app_type` is `codex`:
+
+```bash
+cargo run -- provider import-cc-switch \
+  --data-dir /path/to/data \
+  --cc-switch-db "$HOME/.cc-switch/cc-switch.db"
+```
+
+The source database is opened read-only. Malformed or proxy-placeholder rows
+are reported in the JSON result and do not prevent valid rows from importing.
+Repeated imports match the source provider ID. `--on-conflict` accepts
+`skip` (default), `replace`, or `rename`; local-origin rows are never silently
+overwritten. This milestone does not modify Codex `config.toml`/`auth.json`
+and does not proxy requests.
+
 ## Selection Rules
 
 - Multiple threads with the same `session_id` are treated as one project.

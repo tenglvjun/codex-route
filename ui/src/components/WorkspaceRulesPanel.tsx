@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ProviderSummary, UpsertRouteRuleRequest, WorkspaceRouteRule } from "../api";
+import { displayError } from "../errors";
 
 type WorkspaceRulesPanelProps = {
   providers: ProviderSummary[];
@@ -17,10 +18,6 @@ type FormErrors = {
   provider?: string;
   form?: string;
 };
-
-function displayError(cause: unknown) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 function formatDate(timestamp: number) {
   if (!timestamp) return "Unknown";

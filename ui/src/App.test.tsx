@@ -3,8 +3,13 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { open } from "@tauri-apps/plugin-dialog";
 import { desktopApi, type LifecycleStatus, type ProviderSummary } from "./api";
 import App from "./App";
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
 
 vi.mock("./api", () => ({
   desktopApi: {
@@ -12,6 +17,7 @@ vi.mock("./api", () => ({
     listRouteRules: vi.fn(),
     getLifecycleStatus: vi.fn(),
     setCurrentProvider: vi.fn(),
+    importCcSwitchProviders: vi.fn(),
     upsertRouteRule: vi.fn(),
     removeRouteRule: vi.fn(),
     activateRoute: vi.fn(),
@@ -59,5 +65,34 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("between 1 and 65535"));
     expect(desktopApi.activateRoute).not.toHaveBeenCalled();
+  });
+
+  it("imports providers and refreshes the provider list", async () => {
+    vi.mocked(open).mockResolvedValue("/tmp/cc-switch.db");
+    vi.mocked(desktopApi.listProviders)
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([provider]);
+    vi.mocked(desktopApi.importCcSwitchProviders).mockResolvedValue({
+      source: "/tmp/cc-switch.db",
+      imported: 1,
+      replaced: 0,
+      renamed: 0,
+      skipped: 0,
+      rejected: [],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Default fallback provider" });
+
+    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
+
+    await waitFor(() =>
+      expect(desktopApi.importCcSwitchProviders).toHaveBeenCalledWith({
+        databasePath: "/tmp/cc-switch.db",
+        conflictPolicy: "skip",
+      }),
+    );
+    expect(await screen.findByRole("button", { name: "Current" })).toBeTruthy();
+    expect(screen.getByText("Imported 1 · Replaced 0 · Renamed 0 · Skipped 0 · Rejected 0")).toBeTruthy();
   });
 });

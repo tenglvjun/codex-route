@@ -17,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_providers,
             commands::set_current_provider,
+            commands::import_cc_switch_providers,
             commands::list_route_rules,
             commands::upsert_route_rule,
             commands::remove_route_rule,

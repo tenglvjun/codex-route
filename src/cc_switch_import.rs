@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "lowercase")]
 #[value(rename_all = "lower")]
 pub enum ConflictPolicy {
     Skip,
@@ -275,6 +276,22 @@ fn build_query(columns: &HashSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conflict_policy_uses_lowercase_wire_values() {
+        assert_eq!(
+            serde_json::to_string(&ConflictPolicy::Skip).unwrap(),
+            "\"skip\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ConflictPolicy::Replace).unwrap(),
+            "\"replace\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ConflictPolicy::Rename).unwrap(),
+            "\"rename\""
+        );
+    }
 
     #[test]
     fn query_contains_codex_filter_and_optional_columns() {

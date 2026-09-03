@@ -661,6 +661,344 @@ async fn serves_codex_models_catalog_shape() {
 }
 
 #[tokio::test]
+async fn management_lists_redacted_provider_summaries() {
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-secret"),
+    );
+    current.is_current = true;
+    let mut other = provider(
+        "other",
+        "https://other.example/v1",
+        Some("responses"),
+        Some("other-secret"),
+    );
+    other.is_current = false;
+    store.insert(&current).unwrap();
+    store.insert(&other).unwrap();
+    let state = RouteState::new(store, None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{route_address}/api/providers"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap(),
+        json!([
+            {
+                "id": "current",
+                "name": "current",
+                "category": null,
+                "source": "local",
+                "isCurrent": true
+            },
+            {
+                "id": "other",
+                "name": "other",
+                "category": null,
+                "source": "local",
+                "isCurrent": false
+            }
+        ])
+    );
+
+    route_task.abort();
+}
+
+#[tokio::test]
+async fn management_manages_workspace_route_rules() {
+    let directory = TempDir::new().unwrap();
+    let workspace = directory.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-secret"),
+    );
+    current.is_current = true;
+    let mut mapped = provider(
+        "mapped",
+        "https://mapped.example/v1",
+        Some("responses"),
+        Some("mapped-secret"),
+    );
+    mapped.is_current = false;
+    store.insert(&current).unwrap();
+    store.insert(&mapped).unwrap();
+    let state = RouteState::new(store, None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+    let client = reqwest::Client::new();
+    let workspace_text = workspace.to_string_lossy().to_string();
+
+    let inserted = client
+        .put(format!("http://{route_address}/api/route-rules"))
+        .json(&json!({"workspace": workspace_text, "providerId": "mapped"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(inserted.status(), StatusCode::OK);
+    assert_eq!(
+        inserted.json::<serde_json::Value>().await.unwrap()["action"],
+        "inserted"
+    );
+
+    let listed = client
+        .get(format!("http://{route_address}/api/route-rules"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_rules = listed.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(listed_rules.as_array().unwrap().len(), 1);
+    assert_eq!(listed_rules[0]["providerId"], "mapped");
+
+    let duplicate = client
+        .put(format!("http://{route_address}/api/route-rules"))
+        .json(&json!({"workspace": workspace_text, "providerId": "current"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        duplicate.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "route_rule_exists"
+    );
+
+    let replaced = client
+        .put(format!("http://{route_address}/api/route-rules"))
+        .json(&json!({
+            "workspace": workspace_text,
+            "providerId": "current",
+            "replace": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replaced.status(), StatusCode::OK);
+    assert_eq!(
+        replaced.json::<serde_json::Value>().await.unwrap()["action"],
+        "replaced"
+    );
+
+    let removed = client
+        .delete(format!("http://{route_address}/api/route-rules"))
+        .json(&json!({"workspace": workspace_text}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), StatusCode::OK);
+    assert_eq!(
+        removed.json::<serde_json::Value>().await.unwrap()["providerId"],
+        "current"
+    );
+
+    let missing = client
+        .delete(format!("http://{route_address}/api/route-rules"))
+        .json(&json!({"workspace": workspace_text}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        missing.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "route_rule_not_found"
+    );
+
+    let relative = client
+        .put(format!("http://{route_address}/api/route-rules"))
+        .json(&json!({"workspace": "relative", "providerId": "current"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(relative.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        relative.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "invalid_workspace"
+    );
+
+    route_task.abort();
+}
+
+#[tokio::test]
+async fn management_switches_current_provider_atomically() {
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-secret"),
+    );
+    current.is_current = true;
+    let mut next = provider(
+        "next",
+        "https://next.example/v1",
+        Some("responses"),
+        Some("next-secret"),
+    );
+    next.is_current = false;
+    store.insert(&current).unwrap();
+    store.insert(&next).unwrap();
+    let state = RouteState::new(store.clone(), None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+    let client = reqwest::Client::new();
+
+    let switched = client
+        .put(format!("http://{route_address}/api/providers/current"))
+        .json(&json!({"providerId": "next"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(switched.status(), StatusCode::OK);
+    assert_eq!(
+        switched.json::<serde_json::Value>().await.unwrap(),
+        json!({
+            "id": "next",
+            "name": "next",
+            "category": null,
+            "source": "local",
+            "isCurrent": true
+        })
+    );
+
+    let providers = store.list().unwrap();
+    assert!(!providers[0].is_current);
+    assert!(providers[1].is_current);
+    assert_eq!(providers[1].id, "next");
+
+    let missing = client
+        .put(format!("http://{route_address}/api/providers/current"))
+        .json(&json!({"providerId": "missing"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        missing.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "provider_not_found"
+    );
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .filter(|provider| provider.is_current)
+            .count(),
+        1
+    );
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.is_current)
+            .unwrap()
+            .id,
+        "next"
+    );
+
+    route_task.abort();
+}
+
+#[tokio::test]
+async fn management_reports_route_status_without_credentials() {
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-secret"),
+    );
+    current.is_current = true;
+    store.insert(&current).unwrap();
+    let state = RouteState::new(store, None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let status = reqwest::Client::new()
+        .get(format!("http://{route_address}/api/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    assert_eq!(
+        status.json::<serde_json::Value>().await.unwrap(),
+        json!({
+            "status": "ok",
+            "provider": {
+                "id": "current",
+                "name": "current",
+                "category": null,
+                "source": "local",
+                "isCurrent": true
+            },
+            "providerConfiguration": {"valid": true}
+        })
+    );
+
+    route_task.abort();
+
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let mut invalid = provider(
+        "invalid",
+        "https://invalid.example/v1",
+        Some("responses"),
+        None,
+    );
+    invalid.is_current = true;
+    store.insert(&invalid).unwrap();
+    let state = RouteState::new(store, None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+    let status = reqwest::Client::new()
+        .get(format!("http://{route_address}/api/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    assert_eq!(
+        status.json::<serde_json::Value>().await.unwrap()["providerConfiguration"],
+        json!({"valid": false, "error": "missing_credential"})
+    );
+
+    route_task.abort();
+
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    let state = RouteState::new(store, None).unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+    let status = reqwest::Client::new()
+        .get(format!("http://{route_address}/api/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    assert_eq!(
+        status.json::<serde_json::Value>().await.unwrap(),
+        json!({
+            "status": "degraded",
+            "provider": null,
+            "providerConfiguration": {
+                "valid": false,
+                "error": "no_current_provider"
+            }
+        })
+    );
+
+    route_task.abort();
+}
+
+#[tokio::test]
 async fn passes_sse_bytes_and_health_check() {
     let upstream = Router::new()
         .route("/v1/responses", post(stream_responses))

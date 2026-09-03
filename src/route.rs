@@ -1,10 +1,12 @@
 use axum::body::{to_bytes, Body};
-use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{Json, State};
 use axum::http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use futures_util::TryStreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -15,7 +17,7 @@ use thiserror::Error;
 use crate::codex_provider::{
     extract_active_base_url, extract_codex_api_key, is_responses_wire_api,
 };
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderSummary};
 use crate::provider_store::{ProviderStore, ProviderStoreError};
 use crate::workspace_rule::normalize_workspace_path;
 use crate::{config::ScanConfig, index::SessionWorkspaceIndex};
@@ -62,19 +64,22 @@ impl RouteState {
         Ok(())
     }
 
-    fn selected_provider_startup(&self) -> Result<Provider, RouteStartupError> {
-        if let Some(id) = self.provider_id.as_deref() {
-            return self
+    fn configured_provider(&self) -> Result<Option<Provider>, ProviderStoreError> {
+        match self.provider_id.as_deref() {
+            Some(provider_id) => self.store.get(provider_id),
+            None => self
                 .store
-                .get(id)?
-                .ok_or_else(|| RouteStartupError::ProviderNotFound(id.to_string()));
+                .list()
+                .map(|providers| providers.into_iter().find(|provider| provider.is_current)),
         }
+    }
 
-        self.store
-            .list()?
-            .into_iter()
-            .find(|provider| provider.is_current)
-            .ok_or(RouteStartupError::NoCurrentProvider)
+    fn selected_provider_startup(&self) -> Result<Provider, RouteStartupError> {
+        self.configured_provider()?
+            .ok_or_else(|| match self.provider_id.as_deref() {
+                Some(id) => RouteStartupError::ProviderNotFound(id.to_string()),
+                None => RouteStartupError::NoCurrentProvider,
+            })
     }
 
     fn selected_provider(
@@ -82,10 +87,9 @@ impl RouteState {
         headers: &HeaderMap,
         body: Option<&Value>,
     ) -> Result<Provider, RouteRequestError> {
-        if let Some(id) = self.provider_id.as_deref() {
+        if self.provider_id.is_some() {
             return self
-                .store
-                .get(id)
+                .configured_provider()
                 .map_err(|_| RouteRequestError::ProviderUnavailable)?
                 .ok_or(RouteRequestError::ProviderUnavailable);
         }
@@ -106,11 +110,8 @@ impl RouteState {
             }
         }
 
-        self.store
-            .list()
+        self.configured_provider()
             .map_err(|_| RouteRequestError::ProviderUnavailable)?
-            .into_iter()
-            .find(|provider| provider.is_current)
             .ok_or(RouteRequestError::ProviderUnavailable)
     }
 
@@ -187,6 +188,15 @@ enum ProviderConfigError {
 pub fn build_router(state: RouteState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/api/providers", get(api_providers))
+        .route("/api/providers/current", put(api_set_current_provider))
+        .route(
+            "/api/route-rules",
+            get(api_route_rules)
+                .put(api_upsert_route_rule)
+                .delete(api_remove_route_rule),
+        )
+        .route("/api/status", get(api_status))
         .route("/models", get(models))
         .route("/v1/models", get(models))
         .route("/responses/compact", post(responses_compact))
@@ -275,6 +285,183 @@ pub fn extract_codex_session_id(headers: &HeaderMap, body: &Value) -> Option<Str
 
 async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(json!({"status": "ok"})))
+}
+
+async fn api_providers(State(state): State<RouteState>) -> Response<Body> {
+    match state.store.list() {
+        Ok(providers) => {
+            let summaries: Vec<ProviderSummary> =
+                providers.iter().map(ProviderSummary::from).collect();
+            (StatusCode::OK, Json(summaries)).into_response()
+        }
+        Err(error) => management_store_error(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentProviderRequest {
+    #[serde(rename = "providerId", alias = "provider_id")]
+    provider_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RouteRuleRequest {
+    workspace: PathBuf,
+    #[serde(rename = "providerId", alias = "provider_id")]
+    provider_id: String,
+    #[serde(default)]
+    replace: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceRequest {
+    workspace: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+struct RouteStatus {
+    status: &'static str,
+    provider: Option<ProviderSummary>,
+    #[serde(rename = "providerConfiguration")]
+    provider_configuration: ProviderConfigurationStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderConfigurationStatus {
+    valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'static str>,
+}
+
+async fn api_set_current_provider(
+    State(state): State<RouteState>,
+    payload: Result<Json<CurrentProviderRequest>, JsonRejection>,
+) -> Response<Body> {
+    let payload = match parse_management_json(payload) {
+        Ok(payload) => payload,
+        Err(()) => return invalid_management_json(),
+    };
+    let provider_id = payload.provider_id.trim();
+    if provider_id.is_empty() {
+        return management_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "providerId must not be empty",
+        );
+    }
+    match state.store.set_current(provider_id) {
+        Ok(provider) => (StatusCode::OK, Json(ProviderSummary::from(&provider))).into_response(),
+        Err(error) => management_store_error(error),
+    }
+}
+
+async fn api_route_rules(State(state): State<RouteState>) -> Response<Body> {
+    match state.store.list_route_rules() {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(error) => management_store_error(error),
+    }
+}
+
+async fn api_upsert_route_rule(
+    State(state): State<RouteState>,
+    payload: Result<Json<RouteRuleRequest>, JsonRejection>,
+) -> Response<Body> {
+    let payload = match parse_management_json(payload) {
+        Ok(payload) => payload,
+        Err(()) => return invalid_management_json(),
+    };
+    let provider_id = payload.provider_id.trim();
+    if provider_id.is_empty() {
+        return management_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "providerId must not be empty",
+        );
+    }
+    let outcome =
+        match state
+            .store
+            .upsert_route_rule(&payload.workspace, provider_id, payload.replace)
+        {
+            Ok(outcome) => outcome,
+            Err(error) => return management_store_error(error),
+        };
+    let rule = match state.store.get_route_rule(&payload.workspace) {
+        Ok(Some(rule)) => rule,
+        Ok(None) => {
+            return management_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "store_error",
+                "route rule was not available after update",
+            )
+        }
+        Err(error) => return management_store_error(error),
+    };
+    let action = match outcome {
+        crate::provider_store::UpsertRouteRuleOutcome::Inserted => "inserted",
+        crate::provider_store::UpsertRouteRuleOutcome::Replaced => "replaced",
+    };
+    (
+        StatusCode::OK,
+        Json(json!({"action": action, "rule": rule})),
+    )
+        .into_response()
+}
+
+async fn api_remove_route_rule(
+    State(state): State<RouteState>,
+    payload: Result<Json<WorkspaceRequest>, JsonRejection>,
+) -> Response<Body> {
+    let payload = match parse_management_json(payload) {
+        Ok(payload) => payload,
+        Err(()) => return invalid_management_json(),
+    };
+    match state.store.remove_route_rule(&payload.workspace) {
+        Ok(rule) => (StatusCode::OK, Json(rule)).into_response(),
+        Err(error) => management_store_error(error),
+    }
+}
+
+async fn api_status(State(state): State<RouteState>) -> Response<Body> {
+    let provider = match state.configured_provider() {
+        Ok(provider) => provider,
+        Err(error) => return management_store_error(error),
+    };
+    let provider_configuration = match provider.as_ref() {
+        Some(provider) => match provider_configuration_inner(provider) {
+            Ok(_) => ProviderConfigurationStatus {
+                valid: true,
+                error: None,
+            },
+            Err(error) => ProviderConfigurationStatus {
+                valid: false,
+                error: Some(provider_configuration_error_code(&error)),
+            },
+        },
+        None => ProviderConfigurationStatus {
+            valid: false,
+            error: Some(if state.provider_id.is_some() {
+                "provider_not_found"
+            } else {
+                "no_current_provider"
+            }),
+        },
+    };
+    let status = if provider_configuration.valid {
+        "ok"
+    } else {
+        "degraded"
+    };
+    let provider = provider.as_ref().map(ProviderSummary::from);
+    (
+        StatusCode::OK,
+        Json(RouteStatus {
+            status,
+            provider,
+            provider_configuration,
+        }),
+    )
+        .into_response()
 }
 
 async fn models() -> impl IntoResponse {
@@ -455,6 +642,75 @@ fn route_error_response(error: RouteRequestError) -> Response<Body> {
         axum::Json(json!({"error": {"code": code, "message": message}})),
     )
         .into_response()
+}
+
+fn management_store_error(error: ProviderStoreError) -> Response<Body> {
+    match error {
+        ProviderStoreError::ProviderNotFound(id) => management_error(
+            StatusCode::NOT_FOUND,
+            "provider_not_found",
+            format!("provider '{id}' was not found"),
+        ),
+        ProviderStoreError::RouteRuleAlreadyExists(workspace) => management_error(
+            StatusCode::CONFLICT,
+            "route_rule_exists",
+            format!("workspace route already exists: {}", workspace.display()),
+        ),
+        ProviderStoreError::RouteRuleNotFound(workspace) => management_error(
+            StatusCode::NOT_FOUND,
+            "route_rule_not_found",
+            format!("workspace route was not found: {}", workspace.display()),
+        ),
+        ProviderStoreError::InvalidWorkspace(error) => management_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_workspace",
+            error.to_string(),
+        ),
+        _ => management_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "store_error",
+            "provider store operation failed",
+        ),
+    }
+}
+
+fn parse_management_json<T>(payload: Result<Json<T>, JsonRejection>) -> Result<T, ()> {
+    payload.map(|Json(payload)| payload).map_err(|_| ())
+}
+
+fn invalid_management_json() -> Response<Body> {
+    management_error(
+        StatusCode::BAD_REQUEST,
+        "invalid_request",
+        "request body must be valid JSON",
+    )
+}
+
+fn management_error(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Response<Body> {
+    (
+        status,
+        Json(json!({
+            "error": {
+                "code": code,
+                "message": message.into(),
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn provider_configuration_error_code(error: &ProviderConfigError) -> &'static str {
+    match error {
+        ProviderConfigError::Invalid => "invalid_configuration",
+        ProviderConfigError::UnsupportedWireApi => "unsupported_wire_api",
+        ProviderConfigError::MissingBaseUrl => "missing_base_url",
+        ProviderConfigError::MissingCredential => "missing_credential",
+        ProviderConfigError::InvalidBaseUrl => "invalid_base_url",
+    }
 }
 
 fn is_request_hop_by_hop(name: &axum::http::HeaderName) -> bool {

@@ -351,6 +351,7 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
             let backup_path = options.paths.backup_path();
             if let Some(original) = original.as_deref() {
                 atomic_write(&backup_path, original.as_bytes())?;
+                set_private_permissions(&backup_path)?;
             }
             let state = LifecycleState {
                 version: 1,
@@ -387,6 +388,19 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
             return Err(error);
         }
     };
+    // Persist the child PID before health polling so a crash in the parent
+    // cannot leave a healthy route process untracked by lifecycle state.
+    let mut state = state;
+    state.pid = Some(child.id());
+    if let Err(error) = write_state(&state_path, &state) {
+        if let Err(stop_error) = stop_child(&mut child) {
+            let _ = write_state(&state_path, &state);
+            return Err(LifecycleError::Stop(stop_error));
+        }
+        let _ = child.wait();
+        rollback_activation(&options.paths, &state, changed_config);
+        return Err(error);
+    }
     if !wait_for_health(&mut child, options.port) {
         let exited = child.try_wait().ok().flatten().is_some();
         if !exited {
@@ -406,8 +420,6 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
         });
     }
 
-    let mut state = state;
-    state.pid = Some(child.id());
     if let Err(error) = write_state(&state_path, &state) {
         if let Err(stop_error) = stop_child(&mut child) {
             let _ = write_state(&state_path, &state);
@@ -436,6 +448,7 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
         return Err(LifecycleError::NotActive);
     };
     validate_state_paths(&state, &options.paths)?;
+    let pid = lifecycle_pid(&state, &options.paths.lock_path());
     let current = read_optional(&state.config_path)?;
     let matches_managed = current
         .as_deref()
@@ -446,23 +459,17 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
             .as_deref()
             .is_some_and(|hash| content_hash(contents.as_bytes()) == hash)
     }) || (!state.original_exists && current.is_none());
-    if !matches_managed && !matches_original {
+    if !matches_managed && (!matches_original || pid.is_some()) {
         return Err(LifecycleError::ExternalModification);
     }
 
-    let backup = if matches_managed && state.original_exists {
-        Some(fs::read(&state.backup_path).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                LifecycleError::MissingBackup(state.backup_path.clone())
-            } else {
-                LifecycleError::Io(error)
-            }
-        })?)
-    } else {
-        None
-    };
+    // Verify the backup before stopping the service. This prevents a damaged
+    // backup from turning a successful stop into a destructive config restore.
+    if matches_managed && state.original_exists {
+        let _ = read_verified_backup(&state)?;
+    }
 
-    if let Some(pid) = state.pid.filter(|pid| process_is_alive(*pid)) {
+    if let Some(pid) = pid {
         let lock_pid = read_pid(&options.paths.lock_path()).ok_or_else(|| {
             LifecycleError::Stop("route lock is missing; refusing to signal an unowned PID".into())
         })?;
@@ -478,18 +485,38 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
         }
         stop_process(pid).map_err(LifecycleError::Stop)?;
     }
-    let _ = fs::remove_file(options.paths.lock_path());
 
+    // The service can touch the Codex config while it is shutting down. Do not
+    // overwrite those changes; leave lifecycle state in place for recovery.
+    if matches_managed {
+        let current_after_stop = read_optional(&state.config_path)?;
+        let still_managed = current_after_stop
+            .as_deref()
+            .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
+        if !still_managed {
+            return Err(LifecycleError::ExternalModification);
+        }
+    }
+
+    let backup = if matches_managed && state.original_exists {
+        // Re-read and re-validate immediately before writing. The initial
+        // verification protects the stop path; this one protects the restore
+        // path if another process replaced the backup while stopping.
+        Some(read_verified_backup(&state)?)
+    } else {
+        None
+    };
     if let Some(backup) = backup {
         atomic_write(&state.config_path, &backup)?;
     } else if matches_managed && state.config_path.exists() {
         fs::remove_file(&state.config_path)?;
     }
+    let _ = fs::remove_file(options.paths.lock_path());
     let _ = fs::remove_file(&state.backup_path);
     let _ = fs::remove_file(&state_path);
     Ok(DeactivationResult {
         status: "inactive",
-        pid: state.pid,
+        pid: pid.or(state.pid),
         config_restored: true,
         config_path: state.config_path,
     })
@@ -503,6 +530,12 @@ pub fn status(options: StatusOptions) -> Result<LifecycleStatus, LifecycleError>
         .as_ref()
         .map(|state| state.config_path.clone())
         .unwrap_or_else(|| options.paths.config_path());
+    let pid = state
+        .as_ref()
+        .and_then(|state| lifecycle_pid(state, &lock_path));
+    let port = state.as_ref().map(|state| state.port);
+    let server_reachable = port.is_some_and(server_is_reachable);
+    let active = pid.is_some_and(process_is_alive) && server_reachable && lock_path.exists();
     let external_modification = state.as_ref().is_some_and(|state| {
         let current = read_optional(&state.config_path).ok().flatten();
         let matches_managed = current
@@ -514,12 +547,8 @@ pub fn status(options: StatusOptions) -> Result<LifecycleStatus, LifecycleError>
                 .as_deref()
                 .is_some_and(|hash| content_hash(contents.as_bytes()) == hash)
         }) || (!state.original_exists && current.is_none());
-        !matches_managed && !matches_original
+        !matches_managed && (!matches_original || active)
     });
-    let pid = state.as_ref().and_then(|state| state.pid);
-    let port = state.as_ref().map(|state| state.port);
-    let server_reachable = port.is_some_and(server_is_reachable);
-    let active = pid.is_some_and(process_is_alive) && server_reachable && lock_path.exists();
     let status = if external_modification {
         "external_modified"
     } else if active {
@@ -773,6 +802,23 @@ fn process_is_route_service(pid: u32) -> bool {
     }
 }
 
+fn lifecycle_pid(state: &LifecycleState, lock_path: &Path) -> Option<u32> {
+    state
+        .pid
+        .filter(|pid| process_is_alive(*pid))
+        // Older/in-flight state files may not have persisted the PID yet. If
+        // the lifecycle lock identifies a live route service, use it as the
+        // recovery source rather than orphaning the child process.
+        .or_else(|| {
+            state
+                .pid
+                .is_none()
+                .then(|| read_pid(lock_path))
+                .flatten()
+                .filter(|pid| process_is_alive(*pid))
+        })
+}
+
 fn read_pid(path: &Path) -> Option<u32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
@@ -794,6 +840,25 @@ fn read_optional(path: &Path) -> Result<Option<String>, LifecycleError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+fn read_verified_backup(state: &LifecycleState) -> Result<Vec<u8>, LifecycleError> {
+    let backup = fs::read(&state.backup_path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            LifecycleError::MissingBackup(state.backup_path.clone())
+        } else {
+            LifecycleError::Io(error)
+        }
+    })?;
+    let Some(expected_hash) = state.original_hash.as_deref() else {
+        return Err(LifecycleError::InvalidState(
+            "lifecycle state is missing the original config hash".into(),
+        ));
+    };
+    if content_hash(&backup) != expected_hash {
+        return Err(LifecycleError::ExternalModification);
+    }
+    Ok(backup)
 }
 
 fn read_state(path: &Path) -> Result<Option<LifecycleState>, LifecycleError> {
@@ -946,6 +1011,20 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), LifecycleError> {
         let _ = fs::remove_file(&temp);
         return Err(error.into());
     }
+    Ok(())
+}
+
+fn set_private_permissions(path: &Path) -> Result<(), LifecycleError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(path, permissions)?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

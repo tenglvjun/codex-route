@@ -128,6 +128,36 @@ fn activate_status_deactivate_round_trip_preserves_auth_json() {
 }
 
 #[test]
+fn lifecycle_recovers_a_live_service_when_state_pid_is_missing() {
+    let (_directory, data_dir, codex_home, port) = setup();
+    let config_path = Path::new(&codex_home).join("config.toml");
+    let state_path = Path::new(&data_dir).join("route-state.json");
+    let original = "model = \"gpt-5-codex\"\n";
+    fs::write(&config_path, original).unwrap();
+
+    command(&data_dir, &codex_home, "activate")
+        .args(["--port", &port.to_string()])
+        .assert()
+        .success();
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    let pid = state["pid"].as_u64().unwrap();
+    state["pid"] = serde_json::Value::Null;
+    fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+
+    let status = command_without_home(&data_dir, "status").output().unwrap();
+    assert!(status.status.success());
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["status"], "active");
+    assert_eq!(status["pid"].as_u64(), Some(pid));
+
+    command_without_home(&data_dir, "deactivate")
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+}
+
+#[test]
 fn activation_rejects_port_conflicts_and_duplicate_processes() {
     let (_directory, data_dir, codex_home, port) = setup();
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
@@ -198,6 +228,38 @@ fn deactivate_refuses_to_overwrite_external_config_changes() {
     command(&data_dir, &codex_home, "deactivate")
         .assert()
         .success();
+}
+
+#[test]
+fn deactivate_refuses_to_restore_a_tampered_backup() {
+    let (_directory, data_dir, codex_home, port) = setup();
+    let config_path = Path::new(&codex_home).join("config.toml");
+    let backup_path = Path::new(&data_dir).join("codex-config.toml.bak");
+    let original = "model = \"gpt-5-codex\"\n";
+    fs::write(&config_path, original).unwrap();
+
+    command(&data_dir, &codex_home, "activate")
+        .args(["--port", &port.to_string()])
+        .assert()
+        .success();
+    let managed = fs::read_to_string(&config_path).unwrap();
+    fs::write(&backup_path, "model = \"tampered\"\n").unwrap();
+
+    command_without_home(&data_dir, "deactivate")
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains("externally modified"));
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), managed);
+    assert!(Path::new(&data_dir).join("route-state.json").exists());
+
+    // Restore the backup fixture so the route process can be stopped and the
+    // temporary directory can be cleaned up normally.
+    fs::write(&backup_path, original).unwrap();
+    command_without_home(&data_dir, "deactivate")
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
 }
 
 #[test]

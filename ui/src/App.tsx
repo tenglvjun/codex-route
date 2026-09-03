@@ -1,12 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderTree, LayoutDashboard, Menu, RefreshCw, Server, X } from "lucide-react";
-import { desktopApi, type ImportCcSwitchRequest, type ImportReport, type LifecycleStatus, type ProviderSummary, type UpsertRouteRuleRequest, type WorkspaceRouteRule } from "./api";
+import {
+  Activity,
+  FileInput,
+  FolderTree,
+  Plus,
+  RefreshCw,
+  Server,
+} from "lucide-react";
+import {
+  desktopApi,
+  type ImportCcSwitchRequest,
+  type ImportReport,
+  type LifecycleStatus,
+  type ProviderSummary,
+  type UpsertRouteRuleRequest,
+  type WorkspaceRouteRule,
+} from "./api";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { RouteStatusPanel } from "./components/RouteStatusPanel";
 import { WorkspaceRulesPanel } from "./components/WorkspaceRulesPanel";
 import { displayError } from "./errors";
 
 const DEFAULT_PORT = 16729;
+type ActiveView = "providers" | "rules";
 
 function App() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -15,7 +31,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [port, setPort] = useState(String(DEFAULT_PORT));
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [activeView, setActiveView] = useState<ActiveView>("providers");
+  const [importOpen, setImportOpen] = useState(false);
   const refreshVersion = useRef(0);
 
   const currentProvider = useMemo(
@@ -24,12 +41,11 @@ function App() {
   );
 
   const routeLabel = useMemo(() => {
-    if (!status) return "Route loading";
-    if (status.externalModification) return "Route protected";
-    if (status.active) return "Route active";
-    return `Route ${status.status}`;
+    if (!status) return "Loading route";
+    if (status.externalModification) return "Protected";
+    if (status.active) return "Active";
+    return "Inactive";
   }, [status]);
-  const providerLabel = currentProvider ? `Fallback: ${currentProvider.name}` : "Fallback: None selected";
 
   const refresh = useCallback(async (): Promise<boolean> => {
     const version = ++refreshVersion.current;
@@ -105,95 +121,179 @@ function App() {
     await runAction(() => desktopApi.activateRoute(numericPort));
   };
 
-  const closeMobileNav = () => setMobileNavOpen(false);
+  const toggleRoute = () => {
+    if (!status || busy) return;
+    if (status.active) {
+      if (status.externalModification) return;
+      void runAction(() => desktopApi.deactivateRoute());
+      return;
+    }
+    void activate();
+  };
+
+  const changeView = (view: ActiveView) => {
+    setActiveView(view);
+    if (view !== "providers") setImportOpen(false);
+  };
+
+  const statusModifier = status?.externalModification
+    ? " protected"
+    : status?.active
+      ? " active"
+      : status
+        ? " inactive"
+        : " loading";
+  const routeState = status?.externalModification
+    ? "external-modified"
+    : status?.active
+      ? "active"
+      : status
+        ? "inactive"
+        : "loading";
 
   return (
-    <div className={`app-shell${mobileNavOpen ? " mobile-nav-open" : ""}`}>
-      <aside className="app-rail" aria-label="Primary navigation">
-        <div className="rail-brand">
+    <div className="client-window">
+      <header className="client-toolbar" aria-label="Codex Route toolbar">
+        <div className="toolbar-brand">
           <span className="brand-mark" aria-hidden="true">CR</span>
-          <span className="brand-name">Codex Route</span>
+          <span className="toolbar-brand-copy">
+            <strong>Codex Route</strong>
+            <small>Provider switcher</small>
+          </span>
         </div>
-        <nav className="rail-nav" id="primary-navigation" aria-label="Main navigation">
-          <a href="#overview" onClick={closeMobileNav}>
-            <LayoutDashboard size={18} aria-hidden="true" />
-            <span>Overview</span>
-          </a>
-          <a href="#providers" onClick={closeMobileNav}>
-            <Server size={18} aria-hidden="true" />
-            <span>Providers</span>
-          </a>
-          <a href="#workspace-rules" onClick={closeMobileNav}>
-            <FolderTree size={18} aria-hidden="true" />
-            <span>Workspace rules</span>
-          </a>
-        </nav>
-        <div className="rail-footer" aria-label="Route context">
-          <span className="rail-footer-label">Local desktop client</span>
-          <strong>{routeLabel}</strong>
-          <span>{providerLabel}</span>
-        </div>
-      </aside>
 
-      <div className="app-main">
-        <header className="mobile-topbar">
-          <div className="rail-brand">
-            <span className="brand-mark" aria-hidden="true">CR</span>
-            <span className="brand-name">Codex Route</span>
-          </div>
+        <nav className="toolbar-view-switch" aria-label="Workspace view" role="tablist">
           <button
-            className="icon-button mobile-menu-button"
+            className={`view-tab${activeView === "providers" ? " active" : ""}`}
             type="button"
-            aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
-            aria-expanded={mobileNavOpen}
-            aria-controls="primary-navigation"
-            onClick={() => setMobileNavOpen((open) => !open)}
+            role="tab"
+            aria-selected={activeView === "providers"}
+            onClick={() => changeView("providers")}
           >
-            {mobileNavOpen ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
+            <Server size={16} aria-hidden="true" />
+            Providers
           </button>
+          <button
+            className={`view-tab${activeView === "rules" ? " active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={activeView === "rules"}
+            onClick={() => changeView("rules")}
+          >
+            <FolderTree size={16} aria-hidden="true" />
+            Workspace rules
+          </button>
+        </nav>
+
+        <div className="toolbar-route">
+          <span className={`route-context${statusModifier}`} role="status" aria-live="polite">
+            <Activity size={15} aria-hidden="true" />
+            <span>{routeLabel}</span>
+          </span>
+          <button
+            className={`route-toggle${status?.active ? " active" : ""}`}
+            type="button"
+            role="switch"
+            aria-checked={status?.active === true}
+            data-route-state={routeState}
+            aria-label={status?.active ? "Deactivate route" : "Activate route"}
+            onClick={toggleRoute}
+            disabled={
+              busy ||
+              !status ||
+              (!status.active && currentProvider === undefined) ||
+              status.externalModification
+            }
+          >
+            <span className="route-toggle-track" aria-hidden="true"><span /></span>
+            <span className="route-toggle-label">Route</span>
+          </button>
+        </div>
+
+        <div className="toolbar-actions">
+          <button
+            className="icon-button toolbar-action"
+            type="button"
+            aria-label="Refresh"
+            title="Refresh"
+            onClick={() => void refreshManually()}
+            disabled={busy}
+          >
+            <RefreshCw className={busy ? "spin" : undefined} size={17} aria-hidden="true" />
+          </button>
+          {activeView === "providers" && (
+            <button
+              className="round-action"
+              type="button"
+              aria-label="Import providers"
+              title="Import providers"
+              onClick={() => setImportOpen(true)}
+              disabled={busy}
+            >
+              <FileInput size={18} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            className="round-action primary"
+            type="button"
+            aria-label="Add workspace rule"
+            title="Add workspace rule"
+            onClick={() => changeView("rules")}
+            disabled={busy}
+          >
+            <Plus size={19} aria-hidden="true" />
+          </button>
+        </div>
+      </header>
+
+      <main className="workspace-frame">
+        <header className="workspace-heading">
+          <div>
+            <p className="eyebrow">LOCAL WORKSPACE</p>
+            <h1>{activeView === "providers" ? "Providers" : "Workspace rules"}</h1>
+            <p className="subtitle">
+              {activeView === "providers"
+                ? "Choose the provider Codex should use for local requests."
+                : "Route each Codex workspace to its preferred provider."}
+            </p>
+          </div>
+          <div className="workspace-meta" aria-label="Workspace summary">
+            <span>{providers.length} provider{providers.length === 1 ? "" : "s"}</span>
+            <span>{rules.length} rule{rules.length === 1 ? "" : "s"}</span>
+            {currentProvider && <span className="current-provider">Using {currentProvider.name}</span>}
+          </div>
         </header>
 
-        <main className="shell content">
-          <header className="header content-header">
-            <div className="header-copy">
-              <p className="eyebrow">LOCAL DESKTOP CLIENT</p>
-              <h1>Codex Route</h1>
-              <p className="subtitle">Local Codex provider routing</p>
-              <div className="header-context" aria-label="Current route context">
-                <span>{routeLabel}</span>
-                <span>{providerLabel}</span>
-              </div>
-            </div>
-            <button className="button secondary" onClick={() => void refreshManually()} disabled={busy}>
-              <RefreshCw className={busy ? "spin" : undefined} size={16} aria-hidden="true" />
-              {busy ? "Working..." : "Refresh"}
-            </button>
-          </header>
+        {error && <div className="error" role="alert">{error}</div>}
 
-          {error && <div className="error" role="alert">{error}</div>}
-
-          <section id="overview" className="overview-section" aria-labelledby="status-heading">
-            <RouteStatusPanel
-              status={status}
-              port={port}
-              busy={busy}
-              canActivate={currentProvider !== undefined}
-              onPortChange={setPort}
-              onActivate={() => void activate()}
-              onDeactivate={() => void runAction(() => desktopApi.deactivateRoute())}
-            />
-          </section>
-          <div className="content-grid">
-            <section id="providers" className="content-section" aria-labelledby="providers-heading">
-              <ProviderPanel
-                providers={providers}
-                busy={busy}
-                onSelect={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
-                onImport={importProviders}
-                onError={setError}
-              />
-            </section>
-            <section id="workspace-rules" className="content-section" aria-labelledby="rules-heading">
+        <div className="workspace-content">
+          {activeView === "providers" ? (
+            <>
+              <section className="route-panel-region" aria-label="Route configuration">
+                <RouteStatusPanel
+                  status={status}
+                  port={port}
+                  busy={busy}
+                  canActivate={currentProvider !== undefined}
+                  onPortChange={setPort}
+                  onActivate={() => void activate()}
+                  onDeactivate={() => void runAction(() => desktopApi.deactivateRoute())}
+                />
+              </section>
+              <section className="workspace-panel-region" aria-labelledby="providers-heading">
+                <ProviderPanel
+                  providers={providers}
+                  busy={busy}
+                  onSelect={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
+                  onImport={importProviders}
+                  onError={setError}
+                  importOpen={importOpen}
+                  onImportOpenChange={setImportOpen}
+                />
+              </section>
+            </>
+          ) : (
+            <section className="workspace-panel-region" aria-labelledby="rules-heading">
               <WorkspaceRulesPanel
                 providers={providers}
                 rules={rules}
@@ -201,11 +301,12 @@ function App() {
                 onSave={saveRule}
                 onRemove={(workspace) => runAction(() => desktopApi.removeRouteRule(workspace))}
                 onError={setError}
+                onClose={() => changeView("providers")}
               />
             </section>
-          </div>
-        </main>
-      </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }

@@ -11,6 +11,7 @@ type WorkspaceRulesPanelProps = {
   onSave: (request: UpsertRouteRuleRequest) => Promise<void>;
   onRemove: (workspace: string) => Promise<boolean>;
   onError: (message: string) => void;
+  onClose?: () => void;
 };
 
 type FormErrors = {
@@ -31,6 +32,7 @@ export function WorkspaceRulesPanel({
   onSave,
   onRemove,
   onError,
+  onClose,
 }: WorkspaceRulesPanelProps) {
   const [workspace, setWorkspace] = useState("");
   const [providerId, setProviderId] = useState("");
@@ -141,7 +143,20 @@ export function WorkspaceRulesPanel({
           <p className="eyebrow">WORKSPACE ROUTING</p>
           <h2 id="rules-heading">Project provider rules</h2>
         </div>
-        <span className="count">{rules.length}</span>
+        <div className="panel-heading-actions">
+          <span className="count">{rules.length}</span>
+          {onClose && (
+            <button
+              type="button"
+              className="icon-button panel-close-button"
+              onClick={onClose}
+              aria-label="Close workspace rules"
+              title="Close workspace rules"
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
 
       <form className="rule-form rules-form-surface" onSubmit={submitRule} noValidate>

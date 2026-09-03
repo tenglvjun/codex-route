@@ -54,6 +54,13 @@ describe("RouteStatusPanel", () => {
       />,
     );
 
+    const panel = screen.getByRole("region", { name: "Route status" });
+    expect(panel.classList.contains("route-control-strip")).toBe(true);
+    expect(panel.classList.contains("route-control-strip--active")).toBe(true);
+    expect(panel.getAttribute("data-route-state")).toBe("active");
+    expect(screen.getByRole("group", { name: "Route controls" }).getAttribute("data-route-state")).toBe(
+      "active",
+    );
     expect(screen.getByText("http://127.0.0.1:16729/v1")).toBeTruthy();
     expect(screen.getByText("Managed by Codex Route")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Deactivate" }));
@@ -75,6 +82,8 @@ describe("RouteStatusPanel", () => {
       />,
     );
 
+    const panel = screen.getByRole("region", { name: "Route status" });
+    expect(panel.getAttribute("data-state")).toBe("inactive");
     expect(screen.getByRole("status").textContent).toContain("Inactive");
     expect(screen.getByText("No listener")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Activate" })).toHaveProperty("disabled", false);
@@ -96,6 +105,8 @@ describe("RouteStatusPanel", () => {
       />,
     );
 
+    const panel = screen.getByRole("region", { name: "Route status" });
+    expect(panel.classList.contains("route-control-strip--external-modified")).toBe(true);
     expect(screen.getByRole("status").textContent).toContain("External modification");
     expect(screen.getByRole("alert").textContent).toContain(
       "Codex config changed outside Codex Route. Deactivation is blocked to protect it.",

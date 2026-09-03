@@ -145,6 +145,26 @@ describe("WorkspaceRulesPanel", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("closes when the optional close button is pressed", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <WorkspaceRulesPanel
+        providers={providers}
+        rules={[]}
+        busy={false}
+        onSave={vi.fn()}
+        onRemove={vi.fn()}
+        onError={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Close workspace rules" }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("keeps the form populated when the backend rejects a rule", async () => {
     const onSave = vi.fn().mockRejectedValue(new Error("workspace path must be absolute"));
     const user = userEvent.setup();

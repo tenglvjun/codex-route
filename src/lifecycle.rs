@@ -668,7 +668,10 @@ fn terminate_process(pid: u32) -> Result<(), String> {
         .status();
     #[cfg(windows)]
     let result = Command::new("taskkill")
-        .args(["/PID", &pid.to_string()])
+        // Detached processes cannot receive taskkill's default console-close
+        // request. Terminate the route process tree explicitly so lifecycle
+        // shutdown is bounded and reliable on Windows.
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status();
     match result {
         Ok(status) if status.success() => Ok(()),
@@ -753,7 +756,7 @@ fn force_terminate_process(pid: u32) -> Result<(), String> {
         .status();
     #[cfg(windows)]
     let result = Command::new("taskkill")
-        .args(["/F", "/PID", &pid.to_string()])
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status();
     match result {
         Ok(status) if status.success() => Ok(()),

@@ -1,7 +1,11 @@
 use codex_route::cc_switch_import::{ConflictPolicy, ImportCandidate};
 use codex_route::provider::{Provider, ProviderSource};
 use codex_route::provider_store::{ProviderStore, UpsertOutcome};
+use codex_route::provider_store::{ProviderStoreError, UpsertRouteRuleOutcome};
+use codex_route::workspace_rule::{normalize_workspace_path, WorkspacePathError};
+use rusqlite::Connection;
 use serde_json::json;
+use std::path::Path;
 use tempfile::tempdir;
 
 fn provider(id: &str, source: ProviderSource) -> Provider {
@@ -107,4 +111,136 @@ fn local_id_collision_uses_stable_ccswitch_namespace() {
         .unwrap();
     assert_eq!(repeat.replaced, 1);
     assert!(store.get("ccswitch-same-id-2").unwrap().is_none());
+}
+
+#[test]
+fn route_rules_round_trip_and_enforce_provider_and_duplicate_checks() {
+    let directory = tempdir().unwrap();
+    let store = ProviderStore::open(directory.path().join("codex-route.db")).unwrap();
+    let provider_a = provider("provider-a", ProviderSource::Local);
+    let provider_b = provider("provider-b", ProviderSource::Local);
+    store.insert(&provider_a).unwrap();
+    store.insert(&provider_b).unwrap();
+
+    let workspace = directory.path().join("projects").join("app");
+    let inserted = store
+        .upsert_route_rule(&workspace, "provider-a", false)
+        .unwrap();
+    assert_eq!(inserted, UpsertRouteRuleOutcome::Inserted);
+
+    let rules = store.list_route_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        rules[0].workspace,
+        normalize_workspace_path(&workspace).unwrap()
+    );
+    assert_eq!(rules[0].provider_id, "provider-a");
+
+    assert!(matches!(
+        store.upsert_route_rule(&workspace, "provider-b", false),
+        Err(ProviderStoreError::RouteRuleAlreadyExists(_))
+    ));
+    assert_eq!(
+        store
+            .upsert_route_rule(&workspace, "provider-b", true)
+            .unwrap(),
+        UpsertRouteRuleOutcome::Replaced
+    );
+    assert_eq!(
+        store
+            .get_route_rule(&workspace)
+            .unwrap()
+            .unwrap()
+            .provider_id,
+        "provider-b"
+    );
+
+    assert!(matches!(
+        store.upsert_route_rule(&workspace, "missing", false),
+        Err(ProviderStoreError::ProviderNotFound(id)) if id == "missing"
+    ));
+}
+
+#[test]
+fn route_rules_remove_returns_rule_and_rejects_missing_workspace() {
+    let directory = tempdir().unwrap();
+    let store = ProviderStore::open(directory.path().join("codex-route.db")).unwrap();
+    store
+        .insert(&provider("provider-a", ProviderSource::Local))
+        .unwrap();
+    let workspace = directory.path().join("project");
+    store
+        .upsert_route_rule(&workspace, "provider-a", false)
+        .unwrap();
+
+    let removed = store.remove_route_rule(&workspace).unwrap();
+    assert_eq!(removed.provider_id, "provider-a");
+    assert!(store.list_route_rules().unwrap().is_empty());
+    assert!(matches!(
+        store.remove_route_rule(&workspace),
+        Err(ProviderStoreError::RouteRuleNotFound(_))
+    ));
+}
+
+#[test]
+fn route_rules_reject_relative_paths() {
+    let directory = tempdir().unwrap();
+    let store = ProviderStore::open(directory.path().join("codex-route.db")).unwrap();
+    store
+        .insert(&provider("provider-a", ProviderSource::Local))
+        .unwrap();
+
+    assert!(matches!(
+        store.upsert_route_rule(Path::new("relative"), "provider-a", false),
+        Err(ProviderStoreError::InvalidWorkspace(
+            WorkspacePathError::Relative(_)
+        ))
+    ));
+}
+
+#[test]
+fn existing_schema_v1_is_migrated_with_route_rules_table() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("codex-route.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE providers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                settings_config TEXT NOT NULL,
+                website_url TEXT,
+                category TEXT,
+                created_at INTEGER,
+                sort_index INTEGER,
+                notes TEXT,
+                icon TEXT,
+                icon_color TEXT,
+                meta TEXT NOT NULL DEFAULT '{}',
+                in_failover_queue INTEGER NOT NULL DEFAULT 0,
+                is_current INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'local',
+                source_id TEXT,
+                source_updated_at INTEGER,
+                imported_at INTEGER NOT NULL
+            );
+            PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = ProviderStore::open(&database).unwrap();
+    store
+        .insert(&provider("provider-a", ProviderSource::Local))
+        .unwrap();
+    store
+        .upsert_route_rule(&directory.path().join("project"), "provider-a", false)
+        .unwrap();
+    assert_eq!(store.list_route_rules().unwrap().len(), 1);
+
+    let connection = Connection::open(&database).unwrap();
+    let version: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
 }

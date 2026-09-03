@@ -8,6 +8,7 @@ use codex_route::cc_switch_import::{CcSwitchImportError, CcSwitchImporter, Confl
 use codex_route::config::{ConfigError, ScanConfig};
 use codex_route::index::{IndexError, ResolveError, SessionWorkspaceIndex};
 use codex_route::provider::ProviderSummary;
+use codex_route::provider_store::UpsertRouteRuleOutcome;
 use codex_route::provider_store::{ProviderStore, ProviderStoreError};
 use codex_route::route::{self, RouteStartupError};
 
@@ -61,10 +62,14 @@ struct RouteArgs {
 enum RouteCommand {
     /// Serve native Codex Responses requests through a stored provider.
     Serve(RouteServeArgs),
+    /// Manage workspace-to-provider routing rules.
+    Rule(RouteRuleArgs),
 }
 
 #[derive(Debug, Args)]
 struct RouteServeArgs {
+    #[command(flatten)]
+    scan: ScanArgs,
     /// Directory containing codex-route.db.
     #[arg(long)]
     data_dir: Option<PathBuf>,
@@ -74,6 +79,55 @@ struct RouteServeArgs {
     /// Loopback TCP port.
     #[arg(long, default_value_t = route::DEFAULT_ROUTE_PORT)]
     port: u16,
+}
+
+#[derive(Debug, Args)]
+struct RouteRuleArgs {
+    #[command(subcommand)]
+    command: RouteRuleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RouteRuleCommand {
+    /// Add or update a workspace-to-provider route rule.
+    Add(RouteRuleAddArgs),
+    /// List workspace-to-provider route rules.
+    List(RouteRuleListArgs),
+    /// Remove a workspace-to-provider route rule.
+    Remove(RouteRuleRemoveArgs),
+}
+
+#[derive(Debug, Args)]
+struct RouteRuleAddArgs {
+    /// Workspace path to route.
+    #[arg(long)]
+    workspace: PathBuf,
+    /// Stored provider identifier.
+    #[arg(long)]
+    provider: String,
+    /// Replace an existing rule for this workspace.
+    #[arg(long)]
+    replace: bool,
+    /// Directory containing codex-route.db.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct RouteRuleListArgs {
+    /// Directory containing codex-route.db.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct RouteRuleRemoveArgs {
+    /// Workspace path to remove.
+    #[arg(long)]
+    workspace: PathBuf,
+    /// Directory containing codex-route.db.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -173,12 +227,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
 fn run_route_command(args: RouteArgs) -> Result<(), CliError> {
     match args.command {
         RouteCommand::Serve(args) => run_route_serve(args),
+        RouteCommand::Rule(args) => run_route_rule_command(args),
     }
 }
 
 fn run_route_serve(args: RouteServeArgs) -> Result<(), CliError> {
     let store = Arc::new(open_provider_store(args.data_dir)?);
-    let state = route::RouteState::new(store, args.provider)?;
+    let scan = ScanConfig::from_cli(args.scan.codex_home, args.scan.max_rollout_bytes)?;
+    let state = route::RouteState::with_scan_config(store, args.provider, scan)?;
     state.validate_selection()?;
     eprintln!("listening on 127.0.0.1:{}", args.port);
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -188,6 +244,41 @@ fn run_route_serve(args: RouteServeArgs) -> Result<(), CliError> {
     runtime
         .block_on(route::serve(state, args.port))
         .map_err(CliError::RouteServe)
+}
+
+fn run_route_rule_command(args: RouteRuleArgs) -> Result<(), CliError> {
+    match args.command {
+        RouteRuleCommand::Add(args) => {
+            let store = open_provider_store(args.data_dir)?;
+            let outcome = store.upsert_route_rule(&args.workspace, &args.provider, args.replace)?;
+            let action = match outcome {
+                UpsertRouteRuleOutcome::Inserted => "inserted",
+                UpsertRouteRuleOutcome::Replaced => "replaced",
+            };
+            let rule = store
+                .get_route_rule(&args.workspace)?
+                .ok_or_else(|| CliError::RouteRuleNotFound(args.workspace.clone()))?;
+            write_json(&serde_json::json!({
+                "action": action,
+                "rule": rule,
+            }))
+        }
+        RouteRuleCommand::List(args) => {
+            let store = open_provider_store(args.data_dir)?;
+            write_json(&store.list_route_rules()?)
+        }
+        RouteRuleCommand::Remove(args) => {
+            let store = open_provider_store(args.data_dir)?;
+            let rule = match store.remove_route_rule(&args.workspace) {
+                Ok(rule) => rule,
+                Err(ProviderStoreError::RouteRuleNotFound(path)) => {
+                    return Err(CliError::RouteRuleNotFound(path));
+                }
+                Err(error) => return Err(error.into()),
+            };
+            write_json(&rule)
+        }
+    }
 }
 
 fn run_provider_command(args: ProviderArgs) -> Result<(), CliError> {
@@ -316,6 +407,7 @@ enum CliError {
     ProviderStore(ProviderStoreError),
     CcSwitchImport(CcSwitchImportError),
     ProviderNotFound(String),
+    RouteRuleNotFound(PathBuf),
     RouteStartup(RouteStartupError),
     RouteServe(io::Error),
     Runtime(io::Error),
@@ -326,6 +418,7 @@ impl CliError {
         match self {
             Self::Resolve(ResolveError::SessionNotFound(_)) => 3,
             Self::ProviderNotFound(_) => 3,
+            Self::RouteRuleNotFound(_) => 3,
             Self::Config(_) | Self::Resolve(ResolveError::EmptySessionId) => 2,
             Self::Index(_)
             | Self::Json(_)
@@ -350,6 +443,13 @@ impl std::fmt::Display for CliError {
             Self::ProviderStore(error) => error.fmt(formatter),
             Self::CcSwitchImport(error) => error.fmt(formatter),
             Self::ProviderNotFound(id) => write!(formatter, "provider '{id}' was not found"),
+            Self::RouteRuleNotFound(path) => {
+                write!(
+                    formatter,
+                    "workspace route was not found: {}",
+                    path.display()
+                )
+            }
             Self::RouteStartup(error) => error.fmt(formatter),
             Self::RouteServe(error) => write!(formatter, "route server failed: {error}"),
             Self::Runtime(error) => write!(formatter, "failed to start route runtime: {error}"),

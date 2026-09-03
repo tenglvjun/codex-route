@@ -4,10 +4,12 @@ use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use axum::routing::post;
 use axum::Router;
+use codex_route::config::ScanConfig;
 use codex_route::provider::{Provider, ProviderSource};
 use codex_route::provider_store::ProviderStore;
 use codex_route::route::{
-    build_router, filter_request_headers, upstream_responses_url, RouteStartupError, RouteState,
+    build_router, extract_codex_session_id, filter_request_headers, upstream_responses_url,
+    RouteStartupError, RouteState,
 };
 use futures_util::stream;
 use serde_json::json;
@@ -16,6 +18,25 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+
+fn write_rollout(home: &std::path::Path, session_id: &str, thread_id: &str, cwd: &std::path::Path) {
+    let directory = home.join("sessions/2026/09/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("rollout-{thread_id}.jsonl"));
+    let line = json!({
+        "timestamp": "2026-09-03T12:00:00.000Z",
+        "type": "session_meta",
+        "payload": {
+            "session_id": session_id,
+            "id": thread_id,
+            "timestamp": "2026-09-03T12:00:00Z",
+            "cwd": cwd.to_string_lossy(),
+            "originator": "codex",
+            "cli_version": "test"
+        }
+    });
+    std::fs::write(path, format!("{line}\n")).unwrap();
+}
 
 #[derive(Clone, Default)]
 struct Capture {
@@ -128,6 +149,27 @@ fn route_state(directory: &TempDir, provider: Provider) -> RouteState {
     RouteState::new(store, None).unwrap()
 }
 
+fn dynamic_route_state(
+    directory: &TempDir,
+    providers: &[Provider],
+    codex_home: &std::path::Path,
+) -> (RouteState, Arc<ProviderStore>) {
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    for provider in providers {
+        store.insert(provider).unwrap();
+    }
+    let state = RouteState::with_scan_config(
+        store.clone(),
+        None,
+        ScanConfig {
+            codex_home: codex_home.to_path_buf(),
+            max_rollout_bytes: 64 * 1024,
+        },
+    )
+    .unwrap();
+    (state, store)
+}
+
 #[test]
 fn upstream_url_appends_responses_without_double_slashes() {
     assert_eq!(
@@ -136,6 +178,298 @@ fn upstream_url_appends_responses_without_double_slashes() {
             .as_str(),
         "https://api.example/v1/responses?stream=true"
     );
+}
+
+#[test]
+fn extracts_codex_session_from_header_or_metadata_without_using_previous_response_id() {
+    let mut headers = HeaderMap::new();
+    headers.insert("session_id", HeaderValue::from_static("header-session"));
+    assert_eq!(
+        extract_codex_session_id(
+            &headers,
+            &json!({"metadata": {"session_id": "body-session"}})
+        ),
+        Some("header-session".to_string())
+    );
+
+    let empty = HeaderMap::new();
+    assert_eq!(
+        extract_codex_session_id(
+            &empty,
+            &json!({"metadata": {"session_id": "body-session"}, "previous_response_id": "resp-1"})
+        ),
+        Some("body-session".to_string())
+    );
+    assert_eq!(
+        extract_codex_session_id(&empty, &json!({"previous_response_id": "resp-1"})),
+        None
+    );
+}
+
+#[tokio::test]
+async fn routes_session_workspace_to_rule_provider_and_falls_back_to_current() {
+    let home = TempDir::new().unwrap();
+    let workspace_a = home.path().join("project-a");
+    let workspace_b = home.path().join("project-b");
+    std::fs::create_dir_all(&workspace_a).unwrap();
+    std::fs::create_dir_all(&workspace_b).unwrap();
+    write_rollout(home.path(), "session-a", "thread-a", &workspace_a);
+    write_rollout(home.path(), "session-b", "thread-b", &workspace_b);
+
+    let capture_a = Capture::default();
+    let capture_b = Capture::default();
+    let upstream_a = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(capture_a.clone());
+    let upstream_b = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(capture_b.clone());
+    let (address_a, task_a) = spawn_router(upstream_a).await;
+    let (address_b, task_b) = spawn_router(upstream_b).await;
+
+    let directory = TempDir::new().unwrap();
+    let mut provider_a = provider(
+        "provider-a",
+        &format!("http://{address_a}/v1"),
+        Some("responses"),
+        Some("key-a"),
+    );
+    provider_a.is_current = true;
+    let provider_b = provider(
+        "provider-b",
+        &format!("http://{address_b}/v1"),
+        Some("responses"),
+        Some("key-b"),
+    );
+    let mut provider_b = provider_b;
+    provider_b.is_current = false;
+    let (state, store) = dynamic_route_state(&directory, &[provider_a, provider_b], home.path());
+    store
+        .upsert_route_rule(&workspace_a, "provider-a", false)
+        .unwrap();
+    store
+        .upsert_route_rule(&workspace_b, "provider-b", false)
+        .unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+    let client = reqwest::Client::new();
+
+    let response_a = client
+        .post(format!("http://{route_address}/v1/responses"))
+        .header("session_id", "session-a")
+        .json(&json!({"model": "gpt-5"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response_a.status(), StatusCode::CREATED);
+    assert_eq!(
+        capture_a.authorization.lock().unwrap().as_deref(),
+        Some("Bearer key-a")
+    );
+    assert!(capture_b.body.lock().unwrap().is_empty());
+
+    let response_b = client
+        .post(format!("http://{route_address}/v1/responses"))
+        .json(&json!({"metadata": {"session_id": "session-b"}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response_b.status(), StatusCode::CREATED);
+    assert_eq!(
+        capture_b.authorization.lock().unwrap().as_deref(),
+        Some("Bearer key-b")
+    );
+
+    let response_fallback = client
+        .post(format!("http://{route_address}/v1/responses"))
+        .header("session_id", "unknown-session")
+        .json(&json!({"model": "gpt-5"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response_fallback.status(), StatusCode::CREATED);
+    assert_eq!(
+        *capture_a.authorization.lock().unwrap(),
+        Some("Bearer key-a".to_string())
+    );
+
+    route_task.abort();
+    task_a.abort();
+    task_b.abort();
+}
+
+#[tokio::test]
+async fn fixed_provider_overrides_workspace_route() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_rollout(home.path(), "session-a", "thread-a", &workspace);
+    let capture = Capture::default();
+    let upstream = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(capture.clone());
+    let (upstream_address, upstream_task) = spawn_router(upstream).await;
+    let directory = TempDir::new().unwrap();
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-key"),
+    );
+    current.is_current = true;
+    let fixed = provider(
+        "fixed",
+        &format!("http://{upstream_address}/v1"),
+        Some("responses"),
+        Some("fixed-key"),
+    );
+    let mut fixed = fixed;
+    fixed.is_current = false;
+    let store = Arc::new(ProviderStore::open(directory.path().join("codex-route.db")).unwrap());
+    store.insert(&current).unwrap();
+    store.insert(&fixed).unwrap();
+    store
+        .upsert_route_rule(&workspace, "current", false)
+        .unwrap();
+    let state = RouteState::with_scan_config(
+        store,
+        Some("fixed".to_string()),
+        ScanConfig {
+            codex_home: home.path().to_path_buf(),
+            max_rollout_bytes: 64 * 1024,
+        },
+    )
+    .unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .header("session_id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        capture.authorization.lock().unwrap().as_deref(),
+        Some("Bearer fixed-key")
+    );
+
+    route_task.abort();
+    upstream_task.abort();
+}
+
+#[tokio::test]
+async fn conflicting_or_missing_workspaces_fall_back_to_current_provider() {
+    let home = TempDir::new().unwrap();
+    let workspace_a = home.path().join("project-a");
+    let workspace_b = home.path().join("project-b");
+    let missing_workspace = home.path().join("missing-project");
+    std::fs::create_dir_all(&workspace_a).unwrap();
+    std::fs::create_dir_all(&workspace_b).unwrap();
+    write_rollout(home.path(), "conflicting", "thread-a", &workspace_a);
+    write_rollout(home.path(), "conflicting", "thread-b", &workspace_b);
+    write_rollout(home.path(), "missing", "thread-missing", &missing_workspace);
+
+    let current_capture = Capture::default();
+    let mapped_capture = Capture::default();
+    let current_upstream = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(current_capture.clone());
+    let mapped_upstream = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(mapped_capture.clone());
+    let (current_address, current_task) = spawn_router(current_upstream).await;
+    let (mapped_address, mapped_task) = spawn_router(mapped_upstream).await;
+
+    let directory = TempDir::new().unwrap();
+    let mut current = provider(
+        "current",
+        &format!("http://{current_address}/v1"),
+        Some("responses"),
+        Some("current-key"),
+    );
+    current.is_current = true;
+    let mapped = provider(
+        "mapped",
+        &format!("http://{mapped_address}/v1"),
+        Some("responses"),
+        Some("mapped-key"),
+    );
+    let mut mapped = mapped;
+    mapped.is_current = false;
+    let (state, store) = dynamic_route_state(&directory, &[current, mapped], home.path());
+    store
+        .upsert_route_rule(&workspace_a, "mapped", false)
+        .unwrap();
+    store
+        .upsert_route_rule(&missing_workspace, "mapped", false)
+        .unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+    let client = reqwest::Client::new();
+
+    for session_id in ["conflicting", "missing"] {
+        let response = client
+            .post(format!("http://{route_address}/v1/responses"))
+            .header("session_id", session_id)
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+    assert_eq!(
+        *current_capture.authorization.lock().unwrap(),
+        Some("Bearer current-key".to_string())
+    );
+    assert!(mapped_capture.body.lock().unwrap().is_empty());
+
+    route_task.abort();
+    current_task.abort();
+    mapped_task.abort();
+}
+
+#[tokio::test]
+async fn matching_rule_provider_configuration_errors_are_not_silently_skipped() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_rollout(home.path(), "session-a", "thread-a", &workspace);
+
+    let directory = TempDir::new().unwrap();
+    let mut current = provider(
+        "current",
+        "https://current.example/v1",
+        Some("responses"),
+        Some("current-key"),
+    );
+    current.is_current = true;
+    let mut invalid = provider(
+        "invalid",
+        "https://invalid.example/v1",
+        Some("chat"),
+        Some("invalid-key"),
+    );
+    invalid.is_current = false;
+    let (state, store) = dynamic_route_state(&directory, &[current, invalid], home.path());
+    store
+        .upsert_route_rule(&workspace, "invalid", false)
+        .unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .header("session_id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "responses_only"
+    );
+
+    route_task.abort();
 }
 
 #[test]

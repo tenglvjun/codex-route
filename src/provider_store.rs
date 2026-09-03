@@ -1,11 +1,12 @@
 use crate::provider::{Provider, ProviderSource};
+use crate::workspace_rule::{normalize_workspace_path, WorkspacePathError, WorkspaceRouteRule};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 #[derive(Debug, Error)]
 pub enum ProviderStoreError {
@@ -21,6 +22,14 @@ pub enum ProviderStoreError {
     AlreadyExists(String),
     #[error("provider '{0}' is not a cc-switch import")]
     NotImported(String),
+    #[error("provider '{0}' was not found")]
+    ProviderNotFound(String),
+    #[error("workspace route already exists: {0}")]
+    RouteRuleAlreadyExists(PathBuf),
+    #[error("workspace route was not found: {0}")]
+    RouteRuleNotFound(PathBuf),
+    #[error("invalid workspace path: {0}")]
+    InvalidWorkspace(#[from] WorkspacePathError),
     #[error("unsupported provider database schema version {0}")]
     UnsupportedSchemaVersion(i32),
 }
@@ -242,6 +251,107 @@ impl ProviderStore {
         Ok(report)
     }
 
+    pub fn list_route_rules(&self) -> Result<Vec<WorkspaceRouteRule>, ProviderStoreError> {
+        let connection = self.lock_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT workspace, provider_id, created_at, updated_at
+             FROM workspace_route_rules ORDER BY workspace",
+        )?;
+        let rows = statement.query_map([], row_to_route_rule)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_route_rule(
+        &self,
+        workspace: &std::path::Path,
+    ) -> Result<Option<WorkspaceRouteRule>, ProviderStoreError> {
+        let workspace = normalize_workspace_path(workspace)?;
+        let connection = self.lock_connection()?;
+        connection
+            .query_row(
+                "SELECT workspace, provider_id, created_at, updated_at
+                 FROM workspace_route_rules WHERE workspace = ?1",
+                params![workspace.to_string_lossy().as_ref()],
+                row_to_route_rule,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_route_rule(
+        &self,
+        workspace: &std::path::Path,
+        provider_id: &str,
+        replace: bool,
+    ) -> Result<UpsertRouteRuleOutcome, ProviderStoreError> {
+        let workspace = normalize_workspace_path(workspace)?;
+        let mut connection = self.lock_connection()?;
+        let tx = connection.transaction()?;
+        if !provider_exists_in_transaction(&tx, provider_id)? {
+            return Err(ProviderStoreError::ProviderNotFound(
+                provider_id.to_string(),
+            ));
+        }
+        let workspace_text = workspace.to_string_lossy().to_string();
+        let existing = tx
+            .query_row(
+                "SELECT created_at FROM workspace_route_rules WHERE workspace = ?1",
+                params![workspace_text],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let now = now_unix_seconds();
+        match existing {
+            Some(_created_at) if !replace => {
+                Err(ProviderStoreError::RouteRuleAlreadyExists(workspace))
+            }
+            Some(_created_at) => {
+                tx.execute(
+                    "UPDATE workspace_route_rules
+                     SET provider_id = ?1, updated_at = ?2 WHERE workspace = ?3",
+                    params![provider_id, now, workspace_text],
+                )?;
+                tx.commit()?;
+                Ok(UpsertRouteRuleOutcome::Replaced)
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO workspace_route_rules
+                     (workspace, provider_id, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?3)",
+                    params![workspace_text, provider_id, now],
+                )?;
+                tx.commit()?;
+                Ok(UpsertRouteRuleOutcome::Inserted)
+            }
+        }
+    }
+
+    pub fn remove_route_rule(
+        &self,
+        workspace: &std::path::Path,
+    ) -> Result<WorkspaceRouteRule, ProviderStoreError> {
+        let workspace = normalize_workspace_path(workspace)?;
+        let mut connection = self.lock_connection()?;
+        let tx = connection.transaction()?;
+        let workspace_text = workspace.to_string_lossy().to_string();
+        let rule = tx
+            .query_row(
+                "SELECT workspace, provider_id, created_at, updated_at
+                 FROM workspace_route_rules WHERE workspace = ?1",
+                params![workspace_text],
+                row_to_route_rule,
+            )
+            .optional()?
+            .ok_or_else(|| ProviderStoreError::RouteRuleNotFound(workspace.clone()))?;
+        tx.execute(
+            "DELETE FROM workspace_route_rules WHERE workspace = ?1",
+            params![workspace_text],
+        )?;
+        tx.commit()?;
+        Ok(rule)
+    }
+
     fn lock_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ProviderStoreError> {
         self.connection
             .lock()
@@ -277,6 +387,15 @@ fn create_schema(connection: &Connection) -> Result<(), ProviderStoreError> {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_source
             ON providers(source, source_id)
             WHERE source_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS workspace_route_rules (
+            workspace TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(provider_id) REFERENCES providers(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_route_rules_provider
+            ON workspace_route_rules(provider_id);
         ",
     )?;
     if version < SCHEMA_VERSION {
@@ -407,6 +526,36 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         is_current: row.get(12)?,
         source,
     })
+}
+
+fn row_to_route_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRouteRule> {
+    let workspace: String = row.get(0)?;
+    Ok(WorkspaceRouteRule {
+        workspace: PathBuf::from(workspace),
+        provider_id: row.get(1)?,
+        created_at: row.get(2)?,
+        updated_at: row.get(3)?,
+    })
+}
+
+fn provider_exists_in_transaction(
+    tx: &Transaction<'_>,
+    provider_id: &str,
+) -> Result<bool, ProviderStoreError> {
+    Ok(tx
+        .query_row(
+            "SELECT 1 FROM providers WHERE id = ?1",
+            params![provider_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpsertRouteRuleOutcome {
+    Inserted,
+    Replaced,
 }
 
 fn provider_id_exists(tx: &Transaction<'_>, id: &str) -> Result<bool, ProviderStoreError> {

@@ -1,12 +1,13 @@
-use axum::body::Body;
+use axum::body::{to_bytes, Body};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use futures_util::TryStreamExt;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -16,6 +17,8 @@ use crate::codex_provider::{
 };
 use crate::provider::Provider;
 use crate::provider_store::{ProviderStore, ProviderStoreError};
+use crate::workspace_rule::normalize_workspace_path;
+use crate::{config::ScanConfig, index::SessionWorkspaceIndex};
 
 pub const DEFAULT_ROUTE_PORT: u16 = 16_729;
 
@@ -24,6 +27,7 @@ pub struct RouteState {
     pub(crate) store: Arc<ProviderStore>,
     pub(crate) provider_id: Option<String>,
     pub(crate) client: reqwest::Client,
+    scan_config: Option<ScanConfig>,
 }
 
 impl RouteState {
@@ -38,7 +42,18 @@ impl RouteState {
             store,
             provider_id,
             client,
+            scan_config: None,
         })
+    }
+
+    pub fn with_scan_config(
+        store: Arc<ProviderStore>,
+        provider_id: Option<String>,
+        scan_config: ScanConfig,
+    ) -> Result<Self, RouteStartupError> {
+        let mut state = Self::new(store, provider_id)?;
+        state.scan_config = Some(scan_config);
+        Ok(state)
     }
 
     pub fn validate_selection(&self) -> Result<(), RouteStartupError> {
@@ -62,7 +77,11 @@ impl RouteState {
             .ok_or(RouteStartupError::NoCurrentProvider)
     }
 
-    fn selected_provider(&self) -> Result<Provider, RouteRequestError> {
+    fn selected_provider(
+        &self,
+        headers: &HeaderMap,
+        body: Option<&Value>,
+    ) -> Result<Provider, RouteRequestError> {
         if let Some(id) = self.provider_id.as_deref() {
             return self
                 .store
@@ -71,12 +90,43 @@ impl RouteState {
                 .ok_or(RouteRequestError::ProviderUnavailable);
         }
 
+        if let Some(workspace) = self.resolve_request_workspace(headers, body) {
+            if let Some(rule) = self
+                .store
+                .get_route_rule(&workspace)
+                .map_err(|_| RouteRequestError::ProviderUnavailable)?
+            {
+                if let Some(provider) = self
+                    .store
+                    .get(&rule.provider_id)
+                    .map_err(|_| RouteRequestError::ProviderUnavailable)?
+                {
+                    return Ok(provider);
+                }
+            }
+        }
+
         self.store
             .list()
             .map_err(|_| RouteRequestError::ProviderUnavailable)?
             .into_iter()
             .find(|provider| provider.is_current)
             .ok_or(RouteRequestError::ProviderUnavailable)
+    }
+
+    fn resolve_request_workspace(
+        &self,
+        headers: &HeaderMap,
+        body: Option<&Value>,
+    ) -> Option<PathBuf> {
+        let session_id = extract_codex_session_id(headers, body?)?;
+        let config = self.scan_config.as_ref()?;
+        let index = SessionWorkspaceIndex::build(config).ok()?;
+        let lookup = index.resolve(&session_id).ok()?;
+        if lookup.conflicting_workspaces || !lookup.workspace_exists {
+            return None;
+        }
+        normalize_workspace_path(&lookup.workspace).ok()
     }
 }
 
@@ -114,6 +164,8 @@ pub enum RouteRequestError {
     InvalidUrl,
     #[error("invalid request header")]
     InvalidHeader,
+    #[error("request body is too large or unreadable")]
+    RequestBody,
     #[error("upstream request failed")]
     Upstream,
 }
@@ -199,6 +251,28 @@ pub fn filter_request_headers(
     Ok(output)
 }
 
+/// Extract the stable session identity fields used by Codex Responses clients.
+/// `previous_response_id` is a response-chain cursor, not a session ID.
+pub fn extract_codex_session_id(headers: &HeaderMap, body: &Value) -> Option<String> {
+    for header_name in ["session_id", "x-session-id"] {
+        if let Some(value) = headers
+            .get(header_name)
+            .and_then(|value| value.to_str().ok())
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    body.get("metadata")
+        .and_then(|metadata| metadata.get("session_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(json!({"status": "ok"})))
 }
@@ -232,19 +306,29 @@ async fn forward_endpoint(
     request: Request<Body>,
     endpoint: &str,
 ) -> Result<Response<Body>, RouteRequestError> {
-    let provider = state.selected_provider()?;
-    let (base_url, credential) = provider_configuration(&provider)?;
     let (parts, body) = request.into_parts();
+    let (provider, request_body) = if state.provider_id.is_some() {
+        let provider = state.selected_provider(&parts.headers, None)?;
+        let body_stream = body
+            .into_data_stream()
+            .map_err(|error| std::io::Error::other(error.to_string()));
+        (provider, reqwest::Body::wrap_stream(body_stream))
+    } else {
+        let body = to_bytes(body, 64 * 1024 * 1024)
+            .await
+            .map_err(|_| RouteRequestError::RequestBody)?;
+        let body_json = serde_json::from_slice::<Value>(&body).ok();
+        let provider = state.selected_provider(&parts.headers, body_json.as_ref())?;
+        (provider, reqwest::Body::from(body))
+    };
+    let (base_url, credential) = provider_configuration(&provider)?;
     let url = upstream_endpoint_url(&base_url, endpoint, parts.uri.query())?;
     let headers = filter_request_headers(&parts.headers, Some(&credential))?;
-    let body_stream = body
-        .into_data_stream()
-        .map_err(|error| std::io::Error::other(error.to_string()));
     let upstream = state
         .client
         .post(url)
         .headers(headers)
-        .body(reqwest::Body::wrap_stream(body_stream))
+        .body(request_body)
         .send()
         .await
         .map_err(|_| RouteRequestError::Upstream)?;
@@ -354,6 +438,11 @@ fn route_error_response(error: RouteRequestError) -> Response<Body> {
             StatusCode::NOT_IMPLEMENTED,
             "responses_only",
             "only the Responses protocol is supported",
+        ),
+        RouteRequestError::RequestBody => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_error",
+            "request body is too large or unreadable",
         ),
         RouteRequestError::Upstream => (
             StatusCode::BAD_GATEWAY,

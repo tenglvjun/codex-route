@@ -68,11 +68,16 @@ mod tests {
 
     #[test]
     fn normalizes_missing_absolute_workspace_lexically() {
-        let path = PathBuf::from("/tmp/codex-route-missing/child/../project");
-        assert_eq!(
-            normalize_workspace_path(&path).unwrap(),
-            PathBuf::from("/tmp/codex-route-missing/project")
-        );
+        let directory = tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("missing-root")
+            .join("child")
+            .join("..")
+            .join("project");
+        let expected = directory.path().join("missing-root").join("project");
+
+        assert_eq!(normalize_workspace_path(&path).unwrap(), expected);
     }
 
     #[test]

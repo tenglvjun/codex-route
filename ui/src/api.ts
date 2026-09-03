@@ -44,10 +44,33 @@ export type ActivationResult = {
   lockPath: string;
 };
 
+export type ConflictPolicy = "skip" | "replace" | "rename";
+
+export type ImportCcSwitchRequest = {
+  databasePath: string;
+  conflictPolicy: ConflictPolicy;
+};
+
+export type RejectedProvider = {
+  id: string;
+  reason: string;
+};
+
+export type ImportReport = {
+  source: string;
+  imported: number;
+  replaced: number;
+  renamed: number;
+  skipped: number;
+  rejected: RejectedProvider[];
+};
+
 export const desktopApi = {
   listProviders: () => invoke<ProviderSummary[]>("list_providers"),
   setCurrentProvider: (providerId: string) =>
     invoke<ProviderSummary>("set_current_provider", { providerId }),
+  importCcSwitchProviders: (request: ImportCcSwitchRequest) =>
+    invoke<ImportReport>("import_cc_switch_providers", { request }),
   getLifecycleStatus: () => invoke<LifecycleStatus>("get_lifecycle_status"),
   listRouteRules: () => invoke<WorkspaceRouteRule[]>("list_route_rules"),
   upsertRouteRule: (request: UpsertRouteRuleRequest) =>

@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use codex_route::cc_switch_import::{CcSwitchImporter, ConflictPolicy, ImportReport};
 use codex_route::lifecycle::{ActivationResult, DeactivationResult, LifecycleStatus};
 use codex_route::provider::ProviderSummary;
 use codex_route::workspace_rule::WorkspaceRouteRule;
@@ -21,6 +22,13 @@ pub struct UpsertRouteRuleRequest {
     pub provider_id: String,
     #[serde(default)]
     pub replace: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCcSwitchRequest {
+    pub database_path: PathBuf,
+    pub conflict_policy: ConflictPolicy,
 }
 
 #[tauri::command]
@@ -54,6 +62,28 @@ pub async fn set_current_provider(
     })
     .await
     .map_err(|error| format!("provider command failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn import_cc_switch_providers(
+    state: State<'_, AppState>,
+    request: ImportCcSwitchRequest,
+) -> Result<ImportReport, String> {
+    if request.database_path.as_os_str().is_empty() {
+        return Err("databasePath must not be empty".to_string());
+    }
+
+    let store = Arc::clone(&state.store);
+    tauri::async_runtime::spawn_blocking(move || {
+        let scan = CcSwitchImporter::new(request.database_path)
+            .read_codex_providers()
+            .map_err(|error| error.to_string())?;
+        store
+            .import_scan_transaction(&scan, request.conflict_policy)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("provider import command failed: {error}"))?
 }
 
 #[tauri::command]

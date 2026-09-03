@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { desktopApi, type LifecycleStatus, type ProviderSummary, type UpsertRouteRuleRequest, type WorkspaceRouteRule } from "./api";
+import { desktopApi, type ImportCcSwitchRequest, type ImportReport, type LifecycleStatus, type ProviderSummary, type UpsertRouteRuleRequest, type WorkspaceRouteRule } from "./api";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { RouteStatusPanel } from "./components/RouteStatusPanel";
 import { WorkspaceRulesPanel } from "./components/WorkspaceRulesPanel";
+import { displayError } from "./errors";
 
 const DEFAULT_PORT = 16729;
-
-function displayError(cause: unknown) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 function App() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -51,18 +48,25 @@ function App() {
     void refresh();
   }, [refresh]);
 
-  const runAction = async (action: () => Promise<unknown>): Promise<boolean> => {
+  const runRefreshingAction = async <Result,>(action: () => Promise<Result>): Promise<Result> => {
     setBusy(true);
     setError(null);
     try {
-      await action();
+      const result = await action();
       await refresh();
+      return result;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runAction = async (action: () => Promise<unknown>): Promise<boolean> => {
+    try {
+      await runRefreshingAction(action);
       return true;
     } catch (cause) {
       setError(displayError(cause));
       return false;
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -76,16 +80,12 @@ function App() {
     }
   };
 
-  const saveRule = async (request: UpsertRouteRuleRequest) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await desktopApi.upsertRouteRule(request);
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
+  const saveRule = async (request: UpsertRouteRuleRequest): Promise<void> => {
+    await runRefreshingAction(() => desktopApi.upsertRouteRule(request));
   };
+
+  const importProviders = (request: ImportCcSwitchRequest): Promise<ImportReport> =>
+    runRefreshingAction(() => desktopApi.importCcSwitchProviders(request));
 
   const activate = async () => {
     const numericPort = Number(port);
@@ -125,6 +125,8 @@ function App() {
         providers={providers}
         busy={busy}
         onSelect={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
+        onImport={importProviders}
+        onError={setError}
       />
       <WorkspaceRulesPanel
         providers={providers}

@@ -12,6 +12,7 @@ pub fn run() {
     let shutdown_started_for_run = Arc::clone(&shutdown_started);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::list_providers,
@@ -27,23 +28,23 @@ pub fn run() {
         .expect("error while building codex-route desktop application");
 
     app.run(move |app_handle, event| {
-            if let RunEvent::ExitRequested { api, .. } = event {
-                if shutdown_started_for_run.swap(true, Ordering::SeqCst) {
-                    return;
-                }
-                api.prevent_exit();
-                let state = app_handle
-                    .try_state::<AppState>()
-                    .map(|state| state.inner().clone());
-                let app_handle = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Some(state) = state {
-                        if let Err(error) = state.shutdown().await {
-                            eprintln!("failed to clean up route before exit: {error}");
-                        }
-                    }
-                    app_handle.exit(0);
-                });
+        if let RunEvent::ExitRequested { api, .. } = event {
+            if shutdown_started_for_run.swap(true, Ordering::SeqCst) {
+                return;
             }
-        });
+            api.prevent_exit();
+            let state = app_handle
+                .try_state::<AppState>()
+                .map(|state| state.inner().clone());
+            let app_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(state) = state {
+                    if let Err(error) = state.shutdown().await {
+                        eprintln!("failed to clean up route before exit: {error}");
+                    }
+                }
+                app_handle.exit(0);
+            });
+        }
+    });
 }

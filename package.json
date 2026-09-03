@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "test:renderer": "pnpm --dir ui test",
     "typecheck": "pnpm --dir ui typecheck",
     "build:renderer": "pnpm --dir ui build"
   },

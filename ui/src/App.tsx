@@ -1,23 +1,49 @@
-import { useCallback, useEffect, useState } from "react";
-import { desktopApi, type LifecycleStatus, type ProviderSummary } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { desktopApi, type LifecycleStatus, type ProviderSummary, type UpsertRouteRuleRequest, type WorkspaceRouteRule } from "./api";
+import { ProviderPanel } from "./components/ProviderPanel";
+import { RouteStatusPanel } from "./components/RouteStatusPanel";
+import { WorkspaceRulesPanel } from "./components/WorkspaceRulesPanel";
+
+const DEFAULT_PORT = 16729;
+
+function displayError(cause: unknown) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 function App() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [rules, setRules] = useState<WorkspaceRouteRule[]>([]);
   const [status, setStatus] = useState<LifecycleStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [port, setPort] = useState(String(DEFAULT_PORT));
+  const refreshVersion = useRef(0);
 
-  const refresh = useCallback(async () => {
-    setError(null);
+  const currentProvider = useMemo(
+    () => providers.find((provider) => provider.isCurrent),
+    [providers],
+  );
+
+  const refresh = useCallback(async (): Promise<boolean> => {
+    const version = ++refreshVersion.current;
     try {
-      const [nextProviders, nextStatus] = await Promise.all([
+      const [nextProviders, nextRules, nextStatus] = await Promise.all([
         desktopApi.listProviders(),
+        desktopApi.listRouteRules(),
         desktopApi.getLifecycleStatus(),
       ]);
+      if (version !== refreshVersion.current) return false;
+
       setProviders(nextProviders);
+      setRules(nextRules);
       setStatus(nextStatus);
+      setError(null);
+      if (nextStatus.port) setPort(String(nextStatus.port));
+      return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (version === refreshVersion.current) setError(displayError(cause));
+      return false;
     }
   }, []);
 
@@ -25,17 +51,49 @@ function App() {
     void refresh();
   }, [refresh]);
 
-  const runAction = async (action: () => Promise<unknown>) => {
+  const runAction = async (action: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       await action();
       await refresh();
+      return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(displayError(cause));
+      return false;
     } finally {
       setBusy(false);
     }
+  };
+
+  const refreshManually = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveRule = async (request: UpsertRouteRuleRequest) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await desktopApi.upsertRouteRule(request);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activate = async () => {
+    const numericPort = Number(port);
+    if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+      setError("Port must be an integer between 1 and 65535.");
+      return;
+    }
+    await runAction(() => desktopApi.activateRoute(numericPort));
   };
 
   return (
@@ -44,74 +102,38 @@ function App() {
         <div>
           <p className="eyebrow">LOCAL DESKTOP CLIENT</p>
           <h1>Codex Route</h1>
-          <p className="subtitle">Manage the local Codex route without exposing provider credentials.</p>
+          <p className="subtitle">Local Codex provider routing</p>
         </div>
-        <button className="button secondary" onClick={() => void refresh()} disabled={busy}>
-          Refresh
+        <button className="button secondary" onClick={() => void refreshManually()} disabled={busy}>
+          <RefreshCw className={busy ? "spin" : undefined} size={16} aria-hidden="true" />
+          {busy ? "Working..." : "Refresh"}
         </button>
       </header>
 
       {error && <div className="error" role="alert">{error}</div>}
 
-      <section className="status-card" aria-labelledby="status-heading">
-        <div>
-          <p className="eyebrow" id="status-heading">ROUTE STATUS</p>
-          <strong className={status?.active ? "status active" : "status"}>
-            {status?.status ?? "loading"}
-          </strong>
-          <p className="muted">
-            {status?.port ? `127.0.0.1:${status.port}` : "No listener"}
-            {status?.configManaged ? " · Codex config managed" : ""}
-          </p>
-        </div>
-        <div className="actions">
-          <button
-            className="button primary"
-            onClick={() => void runAction(() => desktopApi.activateRoute())}
-            disabled={busy || status?.active === true}
-          >
-            Activate
-          </button>
-          <button
-            className="button danger"
-            onClick={() => void runAction(() => desktopApi.deactivateRoute())}
-            disabled={busy || status?.active !== true}
-          >
-            Deactivate
-          </button>
-        </div>
-      </section>
-
-      <section className="panel" aria-labelledby="providers-heading">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">PROVIDERS</p>
-            <h2 id="providers-heading">Current provider</h2>
-          </div>
-          <span className="count">{providers.length}</span>
-        </div>
-        {providers.length === 0 ? (
-          <p className="muted">No providers found. Import one with the CLI before using the desktop client.</p>
-        ) : (
-          <div className="provider-list">
-            {providers.map((provider) => (
-              <div className="provider-row" key={provider.id}>
-                <div>
-                  <strong>{provider.name}</strong>
-                  <span className="muted">{provider.id} · {provider.source}</span>
-                </div>
-                <button
-                  className={provider.isCurrent ? "badge current" : "button secondary"}
-                  onClick={() => void runAction(() => desktopApi.setCurrentProvider(provider.id))}
-                  disabled={busy || provider.isCurrent}
-                >
-                  {provider.isCurrent ? "Current" : "Use provider"}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <RouteStatusPanel
+        status={status}
+        port={port}
+        busy={busy}
+        canActivate={currentProvider !== undefined}
+        onPortChange={setPort}
+        onActivate={() => void activate()}
+        onDeactivate={() => void runAction(() => desktopApi.deactivateRoute())}
+      />
+      <ProviderPanel
+        providers={providers}
+        busy={busy}
+        onSelect={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
+      />
+      <WorkspaceRulesPanel
+        providers={providers}
+        rules={rules}
+        busy={busy}
+        onSave={saveRule}
+        onRemove={(workspace) => runAction(() => desktopApi.removeRouteRule(workspace))}
+        onError={setError}
+      />
     </main>
   );
 }

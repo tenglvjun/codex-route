@@ -61,9 +61,11 @@ pub async fn list_route_rules(
     state: State<'_, AppState>,
 ) -> Result<Vec<WorkspaceRouteRule>, String> {
     let store = Arc::clone(&state.store);
-    tauri::async_runtime::spawn_blocking(move || store.list_route_rules().map_err(|e| e.to_string()))
-        .await
-        .map_err(|error| format!("route rule command failed: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        store.list_route_rules().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|error| format!("route rule command failed: {error}"))?
 }
 
 #[tauri::command]
@@ -105,9 +107,7 @@ pub async fn remove_route_rule(
 }
 
 #[tauri::command]
-pub async fn get_lifecycle_status(
-    state: State<'_, AppState>,
-) -> Result<LifecycleStatus, String> {
+pub async fn get_lifecycle_status(state: State<'_, AppState>) -> Result<LifecycleStatus, String> {
     state
         .route
         .lock()
@@ -129,9 +129,7 @@ pub async fn activate_route(
 }
 
 #[tauri::command]
-pub async fn deactivate_route(
-    state: State<'_, AppState>,
-) -> Result<DeactivationResult, String> {
+pub async fn deactivate_route(state: State<'_, AppState>) -> Result<DeactivationResult, String> {
     let mut route = state.route.lock().await;
     route.deactivate().await.map_err(|error| error.to_string())
 }

@@ -2,6 +2,7 @@ pub mod cc_switch_import;
 pub mod codex_provider;
 pub mod config;
 pub mod index;
+pub mod lifecycle;
 pub mod provider;
 pub mod provider_store;
 pub mod rollout;

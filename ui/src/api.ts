@@ -1,0 +1,60 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export type ProviderSummary = {
+  id: string;
+  name: string;
+  category?: string;
+  source: string;
+  isCurrent: boolean;
+};
+
+export type LifecycleStatus = {
+  status: string;
+  active: boolean;
+  pid?: number;
+  port?: number;
+  serverReachable: boolean;
+  configManaged: boolean;
+  externalModification: boolean;
+  configPath: string;
+  statePath: string;
+  lockPath: string;
+};
+
+export type WorkspaceRouteRule = {
+  workspace: string;
+  providerId: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type UpsertRouteRuleRequest = {
+  workspace: string;
+  providerId: string;
+  replace?: boolean;
+};
+
+export type ActivationResult = {
+  status: string;
+  pid: number;
+  port: number;
+  routeUrl: string;
+  configPath: string;
+  statePath: string;
+  lockPath: string;
+};
+
+export const desktopApi = {
+  listProviders: () => invoke<ProviderSummary[]>("list_providers"),
+  setCurrentProvider: (providerId: string) =>
+    invoke<ProviderSummary>("set_current_provider", { providerId }),
+  getLifecycleStatus: () => invoke<LifecycleStatus>("get_lifecycle_status"),
+  listRouteRules: () => invoke<WorkspaceRouteRule[]>("list_route_rules"),
+  upsertRouteRule: (request: UpsertRouteRuleRequest) =>
+    invoke<WorkspaceRouteRule>("upsert_route_rule", { request }),
+  removeRouteRule: (workspace: string) =>
+    invoke<WorkspaceRouteRule>("remove_route_rule", { workspace }),
+  activateRoute: (port?: number) =>
+    invoke<ActivationResult>("activate_route", { request: { port } }),
+  deactivateRoute: () => invoke("deactivate_route"),
+};

@@ -1,6 +1,6 @@
 use crate::config::ScanConfig;
 use crate::provider_store::ProviderStore;
-use crate::route::{RouteStartupError, RouteState};
+use crate::route::{RouteServer, RouteServerError, RouteStartupError, RouteState};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -122,6 +122,14 @@ pub struct LifecycleStatus {
     pub lock_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LifecycleServiceKind {
+    #[default]
+    Child,
+    Embedded,
+}
+
 #[derive(Debug, Error)]
 pub enum LifecycleError {
     #[error("route is already active (pid {0})")]
@@ -132,6 +140,8 @@ pub enum LifecycleError {
     PortInUse(u16),
     #[error("route port must be between 1 and 65535")]
     InvalidPort,
+    #[error("provider ID must not be empty")]
+    InvalidProviderId,
     #[error("route service did not become healthy within {0} seconds")]
     StartupTimeout(u64),
     #[error("route service exited before becoming healthy")]
@@ -158,6 +168,8 @@ pub enum LifecycleError {
     Json(#[source] serde_json::Error),
     #[error("route startup validation failed: {0}")]
     RouteStartup(#[source] RouteStartupError),
+    #[error("embedded route server failed: {0}")]
+    EmbeddedRoute(#[source] RouteServerError),
 }
 
 impl From<io::Error> for LifecycleError {
@@ -178,6 +190,8 @@ struct LifecycleState {
     port: u16,
     provider_id: Option<String>,
     pid: Option<u32>,
+    #[serde(default)]
+    service_kind: LifecycleServiceKind,
 }
 
 #[derive(Debug)]
@@ -219,6 +233,13 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
     if options.port == 0 {
         return Err(LifecycleError::InvalidPort);
     }
+    if options
+        .provider_id
+        .as_deref()
+        .is_some_and(|provider_id| provider_id.trim().is_empty())
+    {
+        return Err(LifecycleError::InvalidProviderId);
+    }
     fs::create_dir_all(&options.paths.data_dir)?;
     fs::create_dir_all(&options.paths.codex_home)?;
     let _operation_lock = acquire_operation_lock(&options.paths.operation_lock_path())?;
@@ -248,8 +269,80 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
         }
     }
 
-    let mut existing_config_needs_projection = false;
+    let (state, changed_config) = prepare_activation_config(&options)?;
+    let state_path = options.paths.state_path();
+    let config_path = options.paths.config_path();
+
+    let mut child = match spawn_service(
+        &options.paths,
+        &options.provider_id,
+        &options.scan_config,
+        options.port,
+    ) {
+        Ok(child) => child,
+        Err(error) => {
+            rollback_activation(&options.paths, &state, changed_config);
+            return Err(error);
+        }
+    };
+    // Persist the child PID before health polling so a crash in the parent
+    // cannot leave a healthy route process untracked by lifecycle state.
+    let mut state = state;
+    state.pid = Some(child.id());
+    state.service_kind = LifecycleServiceKind::Child;
+    if let Err(error) = write_state(&state_path, &state) {
+        if let Err(stop_error) = stop_child(&mut child) {
+            let _ = write_state(&state_path, &state);
+            return Err(LifecycleError::Stop(stop_error));
+        }
+        let _ = child.wait();
+        rollback_activation(&options.paths, &state, changed_config);
+        return Err(error);
+    }
+    if !wait_for_health(&mut child, options.port) {
+        let exited = child.try_wait().ok().flatten().is_some();
+        if !exited {
+            if let Err(error) = stop_child(&mut child) {
+                let mut failed_state = state.clone();
+                failed_state.pid = Some(child.id());
+                let _ = write_state(&state_path, &failed_state);
+                return Err(LifecycleError::Stop(error));
+            }
+        }
+        let _ = child.wait();
+        rollback_activation(&options.paths, &state, changed_config);
+        return Err(if exited {
+            LifecycleError::StartupExited
+        } else {
+            LifecycleError::StartupTimeout(STARTUP_TIMEOUT.as_secs())
+        });
+    }
+
+    if let Err(error) = write_state(&state_path, &state) {
+        if let Err(stop_error) = stop_child(&mut child) {
+            let _ = write_state(&state_path, &state);
+            return Err(LifecycleError::Stop(stop_error));
+        }
+        let _ = child.wait();
+        rollback_activation(&options.paths, &state, changed_config);
+        return Err(error);
+    }
+    Ok(ActivationResult {
+        status: "active",
+        pid: child.id(),
+        port: options.port,
+        route_url: format!("http://127.0.0.1:{}/v1", options.port),
+        config_path,
+        state_path,
+        lock_path: options.paths.lock_path(),
+    })
+}
+
+fn prepare_activation_config(
+    options: &ActivateOptions,
+) -> Result<(LifecycleState, bool), LifecycleError> {
     let existing_state = read_state(&options.paths.state_path())?;
+    let mut existing_config_needs_projection = false;
     if let Some(state) = existing_state.as_ref() {
         validate_state_paths(state, &options.paths)?;
         let current = read_optional(&state.config_path)?;
@@ -363,6 +456,7 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
                 port: options.port,
                 provider_id: options.provider_id.clone(),
                 pid: None,
+                service_kind: LifecycleServiceKind::Child,
             };
             if let Err(error) = write_state(&state_path, &state) {
                 rollback_activation(&options.paths, &state, true);
@@ -375,69 +469,296 @@ pub fn activate(options: ActivateOptions) -> Result<ActivationResult, LifecycleE
             (state, true)
         }
     };
+    Ok((state, changed_config))
+}
 
-    let mut child = match spawn_service(
-        &options.paths,
-        &options.provider_id,
-        &options.scan_config,
-        options.port,
-    ) {
-        Ok(child) => child,
-        Err(error) => {
-            rollback_activation(&options.paths, &state, changed_config);
-            return Err(error);
+/// A lifecycle controller for a route server embedded in the current process.
+///
+/// The existing [`activate`] and [`deactivate`] functions intentionally keep
+/// their child-process behaviour for the CLI. Tauri uses this controller so
+/// the desktop client owns the Axum task directly while reusing the same
+/// config projection, backup, and external-modification safeguards.
+pub struct EmbeddedRouteService {
+    paths: LifecyclePaths,
+    store: Arc<ProviderStore>,
+    scan_config: ScanConfig,
+    provider_id: Option<String>,
+    port: u16,
+    server: Option<RouteServer>,
+    lock: Option<DaemonLock>,
+}
+
+impl EmbeddedRouteService {
+    pub fn new(
+        paths: LifecyclePaths,
+        store: Arc<ProviderStore>,
+        scan_config: ScanConfig,
+        provider_id: Option<String>,
+        port: u16,
+    ) -> Self {
+        Self {
+            paths,
+            store,
+            scan_config,
+            provider_id,
+            port,
+            server: None,
+            lock: None,
         }
-    };
-    // Persist the child PID before health polling so a crash in the parent
-    // cannot leave a healthy route process untracked by lifecycle state.
-    let mut state = state;
-    state.pid = Some(child.id());
-    if let Err(error) = write_state(&state_path, &state) {
-        if let Err(stop_error) = stop_child(&mut child) {
-            let _ = write_state(&state_path, &state);
-            return Err(LifecycleError::Stop(stop_error));
-        }
-        let _ = child.wait();
-        rollback_activation(&options.paths, &state, changed_config);
-        return Err(error);
     }
-    if !wait_for_health(&mut child, options.port) {
-        let exited = child.try_wait().ok().flatten().is_some();
-        if !exited {
-            if let Err(error) = stop_child(&mut child) {
-                let mut failed_state = state.clone();
-                failed_state.pid = Some(child.id());
-                let _ = write_state(&state_path, &failed_state);
-                return Err(LifecycleError::Stop(error));
+
+    pub async fn activate_with(
+        &mut self,
+        provider_id: Option<String>,
+        port: Option<u16>,
+    ) -> Result<ActivationResult, LifecycleError> {
+        let next_provider_id = provider_id.map(|provider_id| provider_id.trim().to_string());
+        let next_port = port.unwrap_or(self.port);
+        if next_port == 0 {
+            return Err(LifecycleError::InvalidPort);
+        }
+        if next_provider_id.as_deref().is_some_and(str::is_empty) {
+            return Err(LifecycleError::InvalidProviderId);
+        }
+
+        let previous_provider_id = self.provider_id.clone();
+        let previous_port = self.port;
+        self.provider_id = next_provider_id;
+        self.port = next_port;
+
+        match self.activate().await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                self.provider_id = previous_provider_id;
+                self.port = previous_port;
+                Err(error)
             }
         }
-        let _ = child.wait();
-        rollback_activation(&options.paths, &state, changed_config);
-        return Err(if exited {
-            LifecycleError::StartupExited
-        } else {
-            LifecycleError::StartupTimeout(STARTUP_TIMEOUT.as_secs())
-        });
     }
 
-    if let Err(error) = write_state(&state_path, &state) {
-        if let Err(stop_error) = stop_child(&mut child) {
-            let _ = write_state(&state_path, &state);
-            return Err(LifecycleError::Stop(stop_error));
+    pub async fn activate(&mut self) -> Result<ActivationResult, LifecycleError> {
+        if self
+            .server
+            .as_ref()
+            .is_some_and(|server| server.status().active)
+        {
+            return Err(LifecycleError::AlreadyActive(std::process::id()));
         }
-        let _ = child.wait();
-        rollback_activation(&options.paths, &state, changed_config);
-        return Err(error);
+        if self.port == 0 {
+            return Err(LifecycleError::InvalidPort);
+        }
+
+        fs::create_dir_all(&self.paths.data_dir)?;
+        fs::create_dir_all(&self.paths.codex_home)?;
+        let _operation_lock = acquire_operation_lock(&self.paths.operation_lock_path())?;
+        let route_state = RouteState::with_scan_config(
+            self.store.clone(),
+            self.provider_id.clone(),
+            self.scan_config.clone(),
+        )
+        .map_err(LifecycleError::RouteStartup)?;
+        route_state
+            .validate_selection()
+            .map_err(LifecycleError::RouteStartup)?;
+
+        let lock = acquire_embedded_lock(&self.paths.lock_path())?;
+        let (mut state, changed_config) = match prepare_activation_config(&ActivateOptions {
+            paths: self.paths.clone(),
+            provider_id: self.provider_id.clone(),
+            port: self.port,
+            scan_config: self.scan_config.clone(),
+        }) {
+            Ok(result) => result,
+            Err(error) => return Err(error),
+        };
+
+        let mut server = RouteServer::new(route_state, self.port);
+        if let Err(error) = server.start().await {
+            rollback_activation(&self.paths, &state, changed_config);
+            return Err(LifecycleError::EmbeddedRoute(error));
+        }
+        let address = server
+            .status()
+            .address
+            .ok_or_else(|| LifecycleError::EmbeddedRoute(RouteServerError::NotRunning))?;
+        if !embedded_server_is_healthy(address).await {
+            let _ = server.stop().await;
+            rollback_activation(&self.paths, &state, changed_config);
+            return Err(LifecycleError::StartupExited);
+        }
+
+        state.provider_id = self.provider_id.clone();
+        state.pid = Some(std::process::id());
+        state.port = address.port();
+        state.service_kind = LifecycleServiceKind::Embedded;
+        if let Err(error) = write_state(&self.paths.state_path(), &state) {
+            let _ = server.stop().await;
+            rollback_activation(&self.paths, &state, changed_config);
+            return Err(error);
+        }
+
+        self.server = Some(server);
+        self.lock = Some(lock);
+        Ok(ActivationResult {
+            status: "active",
+            pid: std::process::id(),
+            port: address.port(),
+            route_url: format!("http://{address}/v1"),
+            config_path: self.paths.config_path(),
+            state_path: self.paths.state_path(),
+            lock_path: self.paths.lock_path(),
+        })
     }
-    Ok(ActivationResult {
-        status: "active",
-        pid: child.id(),
-        port: options.port,
-        route_url: format!("http://127.0.0.1:{}/v1", options.port),
-        config_path,
-        state_path,
-        lock_path: options.paths.lock_path(),
-    })
+
+    pub async fn deactivate(&mut self) -> Result<DeactivationResult, LifecycleError> {
+        let _operation_lock = acquire_operation_lock(&self.paths.operation_lock_path())?;
+        let state_path = self.paths.state_path();
+        let Some(state) = read_state(&state_path)? else {
+            return Err(LifecycleError::NotActive);
+        };
+        validate_state_paths(&state, &self.paths)?;
+        if state.service_kind != LifecycleServiceKind::Embedded {
+            return Err(LifecycleError::Stop(
+                "lifecycle state is owned by the CLI route service".into(),
+            ));
+        }
+
+        let current = read_optional(&state.config_path)?;
+        let matches_managed = current
+            .as_deref()
+            .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
+        let matches_original = current.as_deref().is_some_and(|contents| {
+            state
+                .original_hash
+                .as_deref()
+                .is_some_and(|hash| content_hash(contents.as_bytes()) == hash)
+        }) || (!state.original_exists && current.is_none());
+        let active = self
+            .server
+            .as_ref()
+            .is_some_and(|server| server.status().active);
+        if !matches_managed && (!matches_original || active) {
+            return Err(LifecycleError::ExternalModification);
+        }
+        if matches_managed && state.original_exists {
+            let _ = read_verified_backup(&state)?;
+        }
+
+        // Hold the ownership lock only for the duration of deactivation. If
+        // a stop or restore operation fails, dropping this local lock leaves
+        // the persisted state available for a later recovery attempt instead
+        // of making the current process look active forever.
+        let lock = self.lock.take();
+        if let Some(mut server) = self.server.take() {
+            if let Err(error) = server.stop().await {
+                self.server = Some(server);
+                self.lock = lock;
+                return Err(LifecycleError::EmbeddedRoute(error));
+            }
+        }
+
+        if matches_managed {
+            let current_after_stop = read_optional(&state.config_path)?;
+            let still_managed = current_after_stop
+                .as_deref()
+                .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
+            if !still_managed {
+                return Err(LifecycleError::ExternalModification);
+            }
+        }
+
+        let backup = if matches_managed && state.original_exists {
+            Some(read_verified_backup(&state)?)
+        } else {
+            None
+        };
+        if let Some(backup) = backup {
+            atomic_write(&state.config_path, &backup)?;
+        } else if matches_managed && state.config_path.exists() {
+            fs::remove_file(&state.config_path)?;
+        }
+        let _ = fs::remove_file(self.paths.lock_path());
+        let _ = fs::remove_file(&state.backup_path);
+        let _ = fs::remove_file(&state_path);
+        Ok(DeactivationResult {
+            status: "inactive",
+            pid: Some(state.pid.unwrap_or(std::process::id())),
+            config_restored: true,
+            config_path: state.config_path,
+        })
+    }
+
+    pub fn status(&self) -> Result<LifecycleStatus, LifecycleError> {
+        let state_path = self.paths.state_path();
+        let state = read_state(&state_path)?;
+        let config_path = state
+            .as_ref()
+            .map(|state| state.config_path.clone())
+            .unwrap_or_else(|| self.paths.config_path());
+        let embedded_status = self.server.as_ref().map(RouteServer::status);
+        let active = embedded_status.is_some_and(|status| status.active);
+        let port = embedded_status
+            .and_then(|status| status.port)
+            .or_else(|| state.as_ref().map(|state| state.port));
+        let server_reachable = active;
+        let external_modification = state.as_ref().is_some_and(|state| {
+            let current = read_optional(&state.config_path).ok().flatten();
+            let matches_managed = current
+                .as_deref()
+                .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
+            let matches_original = current.as_deref().is_some_and(|contents| {
+                state
+                    .original_hash
+                    .as_deref()
+                    .is_some_and(|hash| content_hash(contents.as_bytes()) == hash)
+            }) || (!state.original_exists && current.is_none());
+            !matches_managed && (!matches_original || active)
+        });
+        let status = if external_modification {
+            "external_modified"
+        } else if active {
+            "active"
+        } else {
+            "inactive"
+        };
+        Ok(LifecycleStatus {
+            status,
+            active,
+            pid: active.then_some(std::process::id()),
+            port,
+            server_reachable,
+            config_managed: state.is_some(),
+            external_modification,
+            config_path,
+            state_path,
+            lock_path: self.paths.lock_path(),
+        })
+    }
+}
+
+async fn embedded_server_is_healthy(address: std::net::SocketAddr) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(250))
+        .build()
+    else {
+        return false;
+    };
+    client
+        .get(format!("http://{address}/healthz"))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
+}
+
+fn acquire_embedded_lock(path: &Path) -> Result<DaemonLock, LifecycleError> {
+    match DaemonLock::acquire(path) {
+        Ok(lock) => Ok(lock),
+        Err(LifecycleError::AlreadyActive(pid)) if pid == 0 || !process_is_alive(pid) => {
+            let _ = fs::remove_file(path);
+            DaemonLock::acquire(path)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, LifecycleError> {

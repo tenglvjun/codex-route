@@ -8,11 +8,15 @@ use axum::Router;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::net::Ipv4Addr;
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use crate::codex_provider::{
     extract_active_base_url, extract_codex_api_key, is_responses_wire_api,
@@ -23,6 +27,145 @@ use crate::workspace_rule::normalize_workspace_path;
 use crate::{config::ScanConfig, index::SessionWorkspaceIndex};
 
 pub const DEFAULT_ROUTE_PORT: u16 = 16_729;
+
+/// Runtime status for an embedded route server.
+///
+/// The address is assigned when the listener starts. This is particularly
+/// useful for tests and desktop clients that request port `0` and need to
+/// discover the operating system assigned port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RouteServerStatus {
+    pub active: bool,
+    pub address: Option<SocketAddr>,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Error)]
+pub enum RouteServerError {
+    #[error("route server is already running")]
+    AlreadyRunning,
+    #[error("route server is not running")]
+    NotRunning,
+    #[error("route server port {0} is already in use")]
+    PortInUse(u16),
+    #[error("failed to bind route server: {0}")]
+    Bind(#[source] io::Error),
+    #[error("route server task failed: {0}")]
+    Task(String),
+}
+
+/// An in-process Axum Responses server.
+///
+/// `RouteServer` owns the listener task and its shutdown channel. Unlike the
+/// CLI lifecycle wrapper, it does not spawn another executable, create a PID
+/// file, or depend on process signals. A Tauri application can keep one
+/// instance in its application state and control it directly.
+pub struct RouteServer {
+    state: RouteState,
+    requested_port: u16,
+    address: Option<SocketAddr>,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<Result<(), io::Error>>>,
+}
+
+impl RouteServer {
+    pub fn new(state: RouteState, port: u16) -> Self {
+        Self {
+            state,
+            requested_port: port,
+            address: None,
+            shutdown: None,
+            task: None,
+        }
+    }
+
+    /// Start the local listener in the current Tokio runtime.
+    pub async fn start(&mut self) -> Result<RouteServerStatus, RouteServerError> {
+        self.reap_finished_task().await;
+        if self.task.is_some() {
+            return Err(RouteServerError::AlreadyRunning);
+        }
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, self.requested_port))
+            .await
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::AddrInUse && self.requested_port != 0 {
+                    RouteServerError::PortInUse(self.requested_port)
+                } else {
+                    RouteServerError::Bind(error)
+                }
+            })?;
+        let address = listener.local_addr().map_err(RouteServerError::Bind)?;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let state = self.state.clone();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, build_router(state))
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        self.address = Some(address);
+        self.shutdown = Some(shutdown_tx);
+        self.task = Some(task);
+        Ok(self.status())
+    }
+
+    /// Stop the listener and wait for its task to finish gracefully.
+    pub async fn stop(&mut self) -> Result<(), RouteServerError> {
+        let Some(task) = self.task.take() else {
+            self.shutdown.take();
+            self.address = None;
+            return Err(RouteServerError::NotRunning);
+        };
+
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        let result = task.await;
+        self.address = None;
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(RouteServerError::Task(error.to_string())),
+            Err(error) => Err(RouteServerError::Task(error.to_string())),
+        }
+    }
+
+    pub fn status(&self) -> RouteServerStatus {
+        let active = self.task.as_ref().is_some_and(|task| !task.is_finished());
+        RouteServerStatus {
+            active,
+            address: self.address,
+            port: self.address.map(|address| address.port()),
+        }
+    }
+
+    async fn reap_finished_task(&mut self) {
+        let finished = self.task.as_ref().is_some_and(|task| task.is_finished());
+        if !finished {
+            return;
+        }
+
+        self.shutdown.take();
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+        self.address = None;
+    }
+}
+
+impl Drop for RouteServer {
+    fn drop(&mut self) {
+        // Drop cannot await the graceful shutdown future. Aborting here keeps
+        // a dropped desktop state from leaking a listener task indefinitely;
+        // explicit callers should use `stop()` to preserve graceful shutdown.
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        self.shutdown.take();
+    }
+}
 
 #[derive(Clone)]
 pub struct RouteState {
@@ -206,10 +349,16 @@ pub fn build_router(state: RouteState) -> Router {
 }
 
 pub async fn serve(state: RouteState, port: u16) -> Result<(), std::io::Error> {
-    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
-    axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal())
+    let mut server = RouteServer::new(state, port);
+    server
+        .start()
         .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    shutdown_signal().await;
+    server
+        .stop()
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))
 }
 
 async fn shutdown_signal() {

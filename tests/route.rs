@@ -9,7 +9,7 @@ use codex_route::provider::{Provider, ProviderSource};
 use codex_route::provider_store::ProviderStore;
 use codex_route::route::{
     build_router, extract_codex_session_id, filter_request_headers, upstream_responses_url,
-    RouteStartupError, RouteState,
+    RouteServer, RouteServerError, RouteStartupError, RouteState,
 };
 use futures_util::stream;
 use serde_json::json;
@@ -55,6 +55,97 @@ async fn spawn_router(router: Router) -> (SocketAddr, tokio::task::JoinHandle<()
         axum::serve(listener, router).await.unwrap();
     });
     (address, task)
+}
+
+#[tokio::test]
+async fn embedded_route_server_starts_serves_health_and_releases_port() {
+    let directory = TempDir::new().unwrap();
+    let state = route_state(
+        &directory,
+        provider(
+            "upstream",
+            "https://api.example/v1",
+            Some("responses"),
+            Some("sk-test"),
+        ),
+    );
+    let mut server = RouteServer::new(state, 0);
+
+    let started = server.start().await.unwrap();
+    assert!(started.active);
+    let address = started.address.expect("server should expose its address");
+    assert_eq!(started.port, Some(address.port()));
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{address}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap(),
+        json!({"status": "ok"})
+    );
+
+    server.stop().await.unwrap();
+    assert!(!server.status().active);
+    assert!(server.status().address.is_none());
+
+    let listener = TcpListener::bind(address).await;
+    assert!(
+        listener.is_ok(),
+        "stopping the route server should release its port"
+    );
+}
+
+#[tokio::test]
+async fn embedded_route_server_rejects_duplicate_start_and_not_running_stop() {
+    let directory = TempDir::new().unwrap();
+    let state = route_state(
+        &directory,
+        provider(
+            "upstream",
+            "https://api.example/v1",
+            Some("responses"),
+            Some("sk-test"),
+        ),
+    );
+    let mut server = RouteServer::new(state, 0);
+
+    server.start().await.unwrap();
+    assert!(matches!(
+        server.start().await,
+        Err(RouteServerError::AlreadyRunning)
+    ));
+    server.stop().await.unwrap();
+    assert!(matches!(
+        server.stop().await,
+        Err(RouteServerError::NotRunning)
+    ));
+}
+
+#[tokio::test]
+async fn embedded_route_server_reports_port_conflicts() {
+    let occupied = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = occupied.local_addr().unwrap().port();
+    let directory = TempDir::new().unwrap();
+    let state = route_state(
+        &directory,
+        provider(
+            "upstream",
+            "https://api.example/v1",
+            Some("responses"),
+            Some("sk-test"),
+        ),
+    );
+    let mut server = RouteServer::new(state, port);
+
+    assert!(matches!(
+        server.start().await,
+        Err(RouteServerError::PortInUse(actual)) if actual == port
+    ));
 }
 
 async fn capture_responses(

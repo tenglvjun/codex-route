@@ -208,10 +208,27 @@ pub fn build_router(state: RouteState) -> Router {
 pub async fn serve(state: RouteState, port: u16) -> Result<(), std::io::Error> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let ctrl_c = tokio::signal::ctrl_c();
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler should be installable");
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate.recv() => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 pub fn upstream_responses_url(

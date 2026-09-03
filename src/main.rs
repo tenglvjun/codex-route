@@ -7,6 +7,7 @@ use clap::{Args, Parser, Subcommand};
 use codex_route::cc_switch_import::{CcSwitchImportError, CcSwitchImporter, ConflictPolicy};
 use codex_route::config::{ConfigError, ScanConfig};
 use codex_route::index::{IndexError, ResolveError, SessionWorkspaceIndex};
+use codex_route::lifecycle::{self, LifecycleError, LifecyclePaths};
 use codex_route::provider::ProviderSummary;
 use codex_route::provider_store::UpsertRouteRuleOutcome;
 use codex_route::provider_store::{ProviderStore, ProviderStoreError};
@@ -62,6 +63,12 @@ struct RouteArgs {
 enum RouteCommand {
     /// Serve native Codex Responses requests through a stored provider.
     Serve(RouteServeArgs),
+    /// Start the route in the background and connect Codex to it.
+    Activate(RouteActivateArgs),
+    /// Show route process and Codex configuration status.
+    Status(RouteStatusArgs),
+    /// Stop the background route and restore Codex configuration.
+    Deactivate(RouteDeactivateArgs),
     /// Manage workspace-to-provider routing rules.
     Rule(RouteRuleArgs),
 }
@@ -79,6 +86,44 @@ struct RouteServeArgs {
     /// Loopback TCP port.
     #[arg(long, default_value_t = route::DEFAULT_ROUTE_PORT)]
     port: u16,
+    /// Internal lifecycle lock path used by `route activate`.
+    #[arg(long, hide = true)]
+    lifecycle_lock: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct RouteActivateArgs {
+    #[command(flatten)]
+    scan: ScanArgs,
+    /// Directory containing codex-route.db and lifecycle state.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+    /// Provider identifier to use for every request.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Loopback TCP port.
+    #[arg(long, default_value_t = route::DEFAULT_ROUTE_PORT)]
+    port: u16,
+}
+
+#[derive(Debug, Args)]
+struct RouteStatusArgs {
+    /// Directory containing codex-route.db and lifecycle state.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+    /// Override the Codex home used when no active state exists.
+    #[arg(long)]
+    codex_home: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct RouteDeactivateArgs {
+    /// Directory containing codex-route.db and lifecycle state.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+    /// Override the Codex home used when no active state exists.
+    #[arg(long)]
+    codex_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -227,11 +272,18 @@ fn run(cli: Cli) -> Result<(), CliError> {
 fn run_route_command(args: RouteArgs) -> Result<(), CliError> {
     match args.command {
         RouteCommand::Serve(args) => run_route_serve(args),
+        RouteCommand::Activate(args) => run_route_activate(args),
+        RouteCommand::Status(args) => run_route_status(args),
+        RouteCommand::Deactivate(args) => run_route_deactivate(args),
         RouteCommand::Rule(args) => run_route_rule_command(args),
     }
 }
 
 fn run_route_serve(args: RouteServeArgs) -> Result<(), CliError> {
+    let _lock = match args.lifecycle_lock.as_deref() {
+        Some(path) => Some(lifecycle::DaemonLock::acquire(path)?),
+        None => None,
+    };
     let store = Arc::new(open_provider_store(args.data_dir)?);
     let scan = ScanConfig::from_cli(args.scan.codex_home, args.scan.max_rollout_bytes)?;
     let state = route::RouteState::with_scan_config(store, args.provider, scan)?;
@@ -244,6 +296,53 @@ fn run_route_serve(args: RouteServeArgs) -> Result<(), CliError> {
     runtime
         .block_on(route::serve(state, args.port))
         .map_err(CliError::RouteServe)
+}
+
+fn run_route_activate(args: RouteActivateArgs) -> Result<(), CliError> {
+    let data_dir = args.data_dir.unwrap_or_else(default_provider_data_dir);
+    let scan = ScanConfig::from_cli(args.scan.codex_home, args.scan.max_rollout_bytes)?;
+    let paths = LifecyclePaths::new(data_dir, scan.codex_home.clone());
+    let result = lifecycle::activate(lifecycle::ActivateOptions {
+        paths,
+        provider_id: args.provider,
+        port: args.port,
+        scan_config: scan,
+    })?;
+    write_json(&result)
+}
+
+fn run_route_status(args: RouteStatusArgs) -> Result<(), CliError> {
+    let data_dir = args.data_dir.unwrap_or_else(default_provider_data_dir);
+    let codex_home = resolve_lifecycle_codex_home(&data_dir, args.codex_home)?;
+    let result = lifecycle::status(lifecycle::StatusOptions {
+        paths: LifecyclePaths::new(data_dir, codex_home),
+    })?;
+    write_json(&result)
+}
+
+fn run_route_deactivate(args: RouteDeactivateArgs) -> Result<(), CliError> {
+    let data_dir = args.data_dir.unwrap_or_else(default_provider_data_dir);
+    let codex_home = resolve_lifecycle_codex_home(&data_dir, args.codex_home)?;
+    let result = lifecycle::deactivate(lifecycle::DeactivateOptions {
+        paths: LifecyclePaths::new(data_dir, codex_home),
+    })?;
+    write_json(&result)
+}
+
+fn resolve_lifecycle_codex_home(
+    data_dir: &std::path::Path,
+    requested: Option<PathBuf>,
+) -> Result<PathBuf, CliError> {
+    if let Some(path) = requested {
+        if !path.is_absolute() {
+            return Err(CliError::Config(ConfigError::RelativeCodexHome(path)));
+        }
+        return Ok(path);
+    }
+    if let Some(path) = lifecycle::codex_home_from_state(data_dir) {
+        return Ok(path);
+    }
+    Ok(ScanConfig::from_cli(None, None)?.codex_home)
 }
 
 fn run_route_rule_command(args: RouteRuleArgs) -> Result<(), CliError> {
@@ -406,6 +505,7 @@ enum CliError {
     Output(io::Error),
     ProviderStore(ProviderStoreError),
     CcSwitchImport(CcSwitchImportError),
+    Lifecycle(LifecycleError),
     ProviderNotFound(String),
     RouteRuleNotFound(PathBuf),
     RouteStartup(RouteStartupError),
@@ -427,6 +527,7 @@ impl CliError {
             | Self::CcSwitchImport(_)
             | Self::RouteStartup(_)
             | Self::RouteServe(_)
+            | Self::Lifecycle(_)
             | Self::Runtime(_) => 4,
         }
     }
@@ -442,6 +543,7 @@ impl std::fmt::Display for CliError {
             Self::Output(error) => write!(formatter, "failed to write output: {error}"),
             Self::ProviderStore(error) => error.fmt(formatter),
             Self::CcSwitchImport(error) => error.fmt(formatter),
+            Self::Lifecycle(error) => error.fmt(formatter),
             Self::ProviderNotFound(id) => write!(formatter, "provider '{id}' was not found"),
             Self::RouteRuleNotFound(path) => {
                 write!(
@@ -492,5 +594,11 @@ impl From<ResolveError> for CliError {
 impl From<RouteStartupError> for CliError {
     fn from(error: RouteStartupError) -> Self {
         Self::RouteStartup(error)
+    }
+}
+
+impl From<LifecycleError> for CliError {
+    fn from(error: LifecycleError) -> Self {
+        Self::Lifecycle(error)
     }
 }

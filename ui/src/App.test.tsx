@@ -53,6 +53,16 @@ describe("App", () => {
     vi.mocked(desktopApi.getLifecycleStatus).mockResolvedValue(inactiveStatus);
   });
 
+  it("renders the semantic app shell navigation", async () => {
+    render(<App />);
+
+    expect(screen.getByRole("main")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("#overview");
+    expect(screen.getByRole("link", { name: "Providers" }).getAttribute("href")).toBe("#providers");
+    expect(screen.getByRole("link", { name: "Workspace rules" }).getAttribute("href")).toBe("#workspace-rules");
+    expect(await screen.findByRole("heading", { name: "Default fallback provider" })).toBeTruthy();
+  });
+
   it("rejects an invalid route port before invoking Tauri", async () => {
     const user = userEvent.setup();
     render(<App />);

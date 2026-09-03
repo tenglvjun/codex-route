@@ -20,31 +20,62 @@ export function RouteStatusPanel({
   onActivate,
   onDeactivate,
 }: RouteStatusPanelProps) {
+  const statusModifier = status?.externalModification
+    ? " external"
+    : status?.active
+      ? " active"
+      : status
+        ? " inactive"
+        : " loading";
+  const statusLabel = status?.externalModification
+    ? "External modification"
+    : status?.active
+      ? "Active"
+      : status
+        ? "Inactive"
+        : "Loading";
+  const listener = status?.port ? `127.0.0.1:${status.port}` : "No listener";
+  const routeUrl = status?.active && status.port
+    ? `http://127.0.0.1:${status.port}/v1`
+    : "Unavailable";
+
   return (
-    <section className="status-card" aria-labelledby="status-heading">
-      <div className="status-summary">
-        <p className="eyebrow" id="status-heading">ROUTE STATUS</p>
-        <strong
-          className={`status${status?.active ? " active" : ""}${status?.externalModification ? " external" : ""}`}
-          role="status"
-          aria-live="polite"
-        >
-          {status?.status ?? "loading"}
-        </strong>
-        <p className="muted">
-          {status?.port ? `127.0.0.1:${status.port}` : "No listener"}
-          {status?.configManaged ? " · Codex config managed" : ""}
-        </p>
-        {status?.active && status.port && (
-          <p className="route-url">http://127.0.0.1:{status.port}/v1</p>
-        )}
-        {status?.externalModification && (
-          <p className="status-warning">
-            Codex config changed outside Codex Route. Deactivation is blocked to protect it.
-          </p>
-        )}
+    <section className="route-status-card" aria-labelledby="status-heading">
+      <div className="status-heading-block">
+        <p className="eyebrow">ROUTE STATUS</p>
+        <h2 id="status-heading">Route status</h2>
+        <p className="muted">Manage the local listener used for Codex provider routing.</p>
       </div>
-      <div className="route-controls">
+
+      <div className={`status-state${statusModifier}`} role="status" aria-live="polite">
+        <span className="status-state-dot" aria-hidden="true" />
+        <span>{statusLabel}</span>
+      </div>
+
+      <div className="status-details" aria-label="Route details">
+        <div className="status-detail">
+          <span className="muted">Listener</span>
+          <strong className="status-value">{listener}</strong>
+        </div>
+        <div className="status-detail">
+          <span className="muted">Configuration</span>
+          <strong className="status-value">
+            {status?.configManaged ? "Managed by Codex Route" : "Not managed"}
+          </strong>
+        </div>
+        <div className="status-detail">
+          <span className="muted">Route URL</span>
+          <code className="route-url">{routeUrl}</code>
+        </div>
+      </div>
+
+      {status?.externalModification && (
+        <p className="status-warning" role="alert">
+          Codex config changed outside Codex Route. Deactivation is blocked to protect it.
+        </p>
+      )}
+
+      <div className="status-actions">
         <label className="compact-field" htmlFor="route-port">
           <span>Port</span>
           <input

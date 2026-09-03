@@ -110,4 +110,29 @@ describe("ProviderPanel", () => {
     await waitFor(() => expect(onError).toHaveBeenCalledWith("database is locked"));
     expect(screen.getByRole("button", { name: "Import cc-switch" })).toHaveProperty("disabled", false);
   });
+
+  it("marks the current provider and selects a different provider", async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <ProviderPanel
+        providers={[
+          { id: "provider-a", name: "Provider A", source: "local", isCurrent: true },
+          { id: "provider-b", name: "Provider B", source: "imported", isCurrent: false },
+        ]}
+        busy={false}
+        onSelect={onSelect}
+        onImport={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    const currentRow = container.querySelector('[data-provider-id="provider-a"]');
+    expect(currentRow?.querySelector(".provider-status-dot.active")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Current" })).toHaveProperty("disabled", true);
+
+    await user.click(screen.getByRole("button", { name: "Use provider" }));
+
+    expect(onSelect).toHaveBeenCalledWith("provider-b");
+  });
 });

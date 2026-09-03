@@ -53,7 +53,7 @@ export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: 
         </div>
         <span className="count">{providers.length}</span>
       </div>
-      <div className="provider-import">
+      <div className="provider-toolbar provider-import">
         <label className="compact-field" htmlFor="provider-conflict-policy">
           <span>On conflict</span>
           <select
@@ -77,7 +77,7 @@ export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: 
         </button>
       </div>
       {importReport && (
-        <div className="import-result" role="status" aria-live="polite">
+        <div className="import-feedback import-result" role="status" aria-live="polite">
           <strong>Import complete</strong>
           <span>
             Imported {importReport.imported} · Replaced {importReport.replaced} · Renamed {importReport.renamed} · Skipped {importReport.skipped} · Rejected {importReport.rejected.length}
@@ -102,13 +102,19 @@ export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: 
       ) : (
         <div className="provider-list">
           {providers.map((provider) => (
-            <div className="provider-row" key={provider.id}>
-              <div>
-                <strong>{provider.name}</strong>
-                <span className="muted">{provider.id} · {provider.source}</span>
+            <div className="provider-item provider-row" key={provider.id} data-provider-id={provider.id}>
+              <div className="provider-summary">
+                <span
+                  className={`provider-status-dot${provider.isCurrent ? " active" : ""}`}
+                  aria-hidden="true"
+                />
+                <div>
+                  <strong>{provider.name}</strong>
+                  <span className="muted">{provider.id} · {provider.source}</span>
+                </div>
               </div>
               <button
-                className={provider.isCurrent ? "badge current" : "button secondary"}
+                className={provider.isCurrent ? "badge current current-state" : "button secondary"}
                 onClick={() => onSelect(provider.id)}
                 disabled={busy || provider.isCurrent}
               >

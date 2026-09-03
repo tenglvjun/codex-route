@@ -158,6 +158,29 @@ impl ProviderStore {
         Ok(current.is_some())
     }
 
+    pub fn set_current(&self, id: &str) -> Result<Provider, ProviderStoreError> {
+        let mut connection = self.lock_connection()?;
+        let tx = connection.transaction()?;
+        if !provider_exists_in_transaction(&tx, id)? {
+            return Err(ProviderStoreError::ProviderNotFound(id.to_string()));
+        }
+        tx.execute(
+            "UPDATE providers SET is_current = CASE WHEN id = ?1 THEN 1 ELSE 0 END",
+            params![id],
+        )?;
+        let provider = tx.query_row(
+            "SELECT id, name, settings_config, website_url, category,
+                    created_at, sort_index, notes, icon, icon_color, meta,
+                    in_failover_queue, is_current, source, source_id,
+                    source_updated_at
+             FROM providers WHERE id = ?1",
+            params![id],
+            row_to_provider,
+        )?;
+        tx.commit()?;
+        Ok(provider)
+    }
+
     pub fn find_imported(&self, source_id: &str) -> Result<Option<Provider>, ProviderStoreError> {
         let connection = self.lock_connection()?;
         connection

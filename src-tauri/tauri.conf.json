@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Codex Route",
+  "version": "0.1.0",
+  "identifier": "com.tenglvjun.codexroute",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeDevCommand": "pnpm --dir ui dev",
+    "beforeBuildCommand": "pnpm --dir ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Codex Route",
+        "width": 1024,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

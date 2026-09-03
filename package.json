@@ -1,0 +1,15 @@
+{
+  "name": "codex-route-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "typecheck": "pnpm --dir ui typecheck",
+    "build:renderer": "pnpm --dir ui build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0"
+  }
+}

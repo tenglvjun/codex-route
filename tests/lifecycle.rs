@@ -1,4 +1,6 @@
 use assert_cmd::prelude::*;
+use codex_route::config::ScanConfig;
+use codex_route::lifecycle::{EmbeddedRouteService, LifecyclePaths};
 use codex_route::provider::{Provider, ProviderSource};
 use codex_route::provider_store::ProviderStore;
 use predicates::prelude::*;
@@ -9,6 +11,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 static NEXT_TEST_PORT: AtomicU32 = AtomicU32::new(35_000);
@@ -88,6 +91,72 @@ fn command_without_home(data_dir: &str, subcommand: &str) -> Command {
     let mut command = Command::cargo_bin("codex-route").unwrap();
     command.args(["route", subcommand, "--data-dir", data_dir]);
     command
+}
+
+#[tokio::test]
+async fn embedded_route_service_activates_and_restores_config() {
+    let (_directory, data_dir, codex_home, port) = setup();
+    let data_dir = Path::new(&data_dir).to_path_buf();
+    let codex_home = Path::new(&codex_home).to_path_buf();
+    let config_path = codex_home.join("config.toml");
+    let original_config = "model = \"gpt-5-codex\"\n";
+    fs::write(&config_path, original_config).unwrap();
+
+    let store = Arc::new(ProviderStore::open(data_dir.join("codex-route.db")).unwrap());
+    let scan_config = ScanConfig {
+        codex_home: codex_home.clone(),
+        max_rollout_bytes: 64 * 1024,
+    };
+    let paths = LifecyclePaths::new(data_dir, codex_home);
+    let mut service = EmbeddedRouteService::new(paths, store, scan_config, None, port);
+
+    let activation = service.activate().await.unwrap();
+    assert_eq!(activation.status, "active");
+    assert_eq!(activation.pid, std::process::id());
+    assert_eq!(service.status().unwrap().status, "active");
+    assert_eq!(
+        reqwest::get(format!("http://127.0.0.1:{port}/healthz"))
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert!(fs::read_to_string(&config_path)
+        .unwrap()
+        .contains("codex-route-managed: v1"));
+
+    let deactivation = service.deactivate().await.unwrap();
+    assert_eq!(deactivation.status, "inactive");
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), original_config);
+    assert_eq!(service.status().unwrap().status, "inactive");
+    assert!(!config_path.exists() || fs::read_to_string(&config_path).unwrap() == original_config);
+}
+
+#[tokio::test]
+async fn embedded_route_service_rejects_invalid_activation_without_poisoning_state() {
+    let (_directory, data_dir, codex_home, port) = setup();
+    let data_dir = Path::new(&data_dir).to_path_buf();
+    let codex_home = Path::new(&codex_home).to_path_buf();
+    let store = Arc::new(ProviderStore::open(data_dir.join("codex-route.db")).unwrap());
+    let scan_config = ScanConfig {
+        codex_home: codex_home.clone(),
+        max_rollout_bytes: 64 * 1024,
+    };
+    let paths = LifecyclePaths::new(data_dir, codex_home);
+    let mut service = EmbeddedRouteService::new(paths, store, scan_config, None, port);
+
+    assert!(matches!(
+        service.activate_with(None, Some(0)).await,
+        Err(codex_route::lifecycle::LifecycleError::InvalidPort)
+    ));
+    assert!(matches!(
+        service.activate_with(Some("  ".into()), None).await,
+        Err(codex_route::lifecycle::LifecycleError::InvalidProviderId)
+    ));
+
+    let activation = service.activate().await.unwrap();
+    assert_eq!(activation.port, port);
+    service.deactivate().await.unwrap();
 }
 
 #[test]

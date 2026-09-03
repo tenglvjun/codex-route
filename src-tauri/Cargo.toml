@@ -1,0 +1,25 @@
+[package]
+name = "codex-route-desktop"
+version = "0.1.0"
+description = "Codex Route desktop client"
+authors = ["tenglvjun"]
+edition = "2021"
+rust-version = "1.75"
+
+[lib]
+name = "codex_route_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "codex-route-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.4", features = [] }
+
+[dependencies]
+codex-route = { path = ".." }
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.8", features = [] }
+tokio = { version = "1", features = ["sync"] }

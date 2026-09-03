@@ -8,7 +8,26 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tempfile::TempDir;
+
+static NEXT_TEST_PORT: AtomicU32 = AtomicU32::new(35_000);
+
+fn terminate_test_process(pid: u64) {
+    #[cfg(unix)]
+    let mut command = {
+        let mut command = Command::new("kill");
+        command.args(["-TERM", &pid.to_string()]);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("taskkill");
+        command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        command
+    };
+    command.status().expect("test process should be terminable");
+}
 
 fn setup() -> (TempDir, String, String, u16) {
     let directory = TempDir::new().unwrap();
@@ -37,11 +56,13 @@ fn setup() -> (TempDir, String, String, u16) {
             source: ProviderSource::Local,
         })
         .unwrap();
-    let port = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let port = loop {
+        let candidate = 30_000 + (NEXT_TEST_PORT.fetch_add(1, Ordering::Relaxed) % 20_000);
+        let candidate = candidate as u16;
+        if TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, candidate)).is_ok() {
+            break candidate;
+        }
+    };
     (
         directory,
         data_dir.to_string_lossy().into_owned(),
@@ -278,9 +299,7 @@ fn interrupted_activation_and_restore_states_are_recoverable() {
         serde_json::from_slice(&fs::read(Path::new(&data_dir).join("route-state.json")).unwrap())
             .unwrap();
     let first_pid = first_state["pid"].as_u64().unwrap();
-    let _ = Command::new("kill")
-        .args(["-TERM", &first_pid.to_string()])
-        .status();
+    terminate_test_process(first_pid);
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Simulate a crash after the state journal was written but before config projection.
@@ -300,9 +319,7 @@ fn interrupted_activation_and_restore_states_are_recoverable() {
         serde_json::from_slice(&fs::read(Path::new(&data_dir).join("route-state.json")).unwrap())
             .unwrap();
     let retry_pid = retry_state["pid"].as_u64().unwrap();
-    let _ = Command::new("kill")
-        .args(["-TERM", &retry_pid.to_string()])
-        .status();
+    terminate_test_process(retry_pid);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let backup = fs::read(Path::new(&data_dir).join("codex-config.toml.bak")).unwrap();
     fs::write(&config_path, backup).unwrap();

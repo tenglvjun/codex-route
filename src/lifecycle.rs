@@ -607,9 +607,22 @@ fn spawn_service(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // Keep the long-lived route daemon out of the activation command's
+        // console/process group. In particular, this prevents Windows test
+        // harness output pipes from remaining open after `activate` returns.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
     if let Some(provider_id) = provider_id {
         command.arg("--provider").arg(provider_id);
     }
+    #[cfg(windows)]
+    prevent_standard_handle_inheritance();
     command.spawn().map_err(LifecycleError::Launch)
 }
 
@@ -1026,6 +1039,33 @@ fn set_private_permissions(path: &Path) -> Result<(), LifecycleError> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(windows)]
+fn prevent_standard_handle_inheritance() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+
+    // `Command` inherits every inheritable handle on Windows. The activation
+    // command may itself have stdout/stderr pipes owned by a caller (for
+    // example `assert_cmd` or a shell); if the detached daemon keeps those
+    // handles open, the caller waits forever for EOF. Keep the daemon's
+    // explicitly configured log handles inheritable, but make the parent's
+    // standard handles ineligible before spawning it.
+    let handles = [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ];
+    for handle in handles {
+        if !handle.is_null() {
+            // SAFETY: the handles are borrowed standard handles owned by the
+            // current process; SetHandleInformation only changes inheritance.
+            unsafe {
+                let _ = SetHandleInformation(handle as HANDLE, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
 }
 
 fn content_hash(contents: &[u8]) -> String {

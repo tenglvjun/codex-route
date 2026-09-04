@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   FileInput,
   FolderTree,
+  LayoutDashboard,
   Menu,
   Plus,
   RefreshCw,
@@ -22,9 +23,13 @@ import { ProviderPanel } from "./components/ProviderPanel";
 import { RouteStatusPanel } from "./components/RouteStatusPanel";
 import { WorkspaceRulesPanel } from "./components/WorkspaceRulesPanel";
 import { displayError } from "./errors";
+import { clientFacade } from "./clientFacade";
+import type { ClientSnapshot, DiagnosticRecord } from "./api";
+import { DashboardPage } from "./components/DashboardPage";
+import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
 
 const DEFAULT_PORT = 16729;
-type ActiveView = "providers" | "rules";
+type ActiveView = "dashboard" | "providers" | "rules";
 
 function App() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -34,10 +39,31 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [port, setPort] = useState(String(DEFAULT_PORT));
-  const [activeView, setActiveView] = useState<ActiveView>("providers");
+  const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [importOpen, setImportOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const refreshVersion = useRef(0);
+  const [clientSnapshot, setClientSnapshot] = useState<ClientSnapshot | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticRecord[]>([]);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+
+  const applySnapshot = useCallback((snapshot: ClientSnapshot) => {
+    setClientSnapshot(snapshot);
+    setProviders(snapshot.providers);
+    setRules(snapshot.rules);
+    setStatus({
+      status: snapshot.runtime.phase,
+      active: snapshot.runtime.active,
+      pid: snapshot.runtime.pid,
+      port: snapshot.runtime.port,
+      serverReachable: snapshot.runtime.serverReachable,
+      configManaged: snapshot.runtime.configManaged,
+      externalModification: snapshot.runtime.externalModification,
+      configPath: snapshot.codex.configPath,
+      statePath: "",
+      lockPath: "",
+    });
+    setPort(snapshot.runtime.port ? String(snapshot.runtime.port) : String(DEFAULT_PORT));
+  }, []);
 
   const currentProvider = useMemo(
     () => providers.find((provider) => provider.isCurrent),
@@ -52,41 +78,46 @@ function App() {
   }, [status]);
 
   const refresh = useCallback(async (): Promise<boolean> => {
-    const version = ++refreshVersion.current;
     setLoading(true);
     try {
-      const [nextProviders, nextRules, nextStatus] = await Promise.all([
-        desktopApi.listProviders(),
-        desktopApi.listRouteRules(),
-        desktopApi.getLifecycleStatus(),
-      ]);
-      if (version !== refreshVersion.current) return false;
-
-      setProviders(nextProviders);
-      setRules(nextRules);
-      setStatus(nextStatus);
+      const snapshot = await clientFacade.loadSnapshot();
+      applySnapshot(snapshot);
       setError(null);
-      if (nextStatus.port) setPort(String(nextStatus.port));
       return true;
     } catch (cause) {
-      if (version === refreshVersion.current) setError(displayError(cause));
+      setError(displayError(cause));
       return false;
     } finally {
-      if (version === refreshVersion.current) setLoading(false);
+      setLoading(false);
     }
-  }, []);
+  }, [applySnapshot]);
 
   useEffect(() => {
+    let cancelled = false;
+    const unsubscriptions: Array<() => void> = [];
+    const keepSubscription = (cancel: () => void) => {
+      if (cancelled) cancel();
+      else unsubscriptions.push(cancel);
+    };
+    void clientFacade.getDiagnostics(20).then(setDiagnostics).catch(() => undefined);
+    void clientFacade.subscribe((snapshot) => {
+      applySnapshot(snapshot);
+    }).then(keepSubscription).catch(() => undefined);
+    void clientFacade.subscribeDiagnostics((record) => {
+      setDiagnostics((current) => [record, ...current.filter((item) => item.id !== record.id)].slice(0, 20));
+    }).then(keepSubscription).catch(() => undefined);
     void refresh();
-  }, [refresh]);
+    return () => {
+      cancelled = true;
+      unsubscriptions.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [applySnapshot, refresh]);
 
-  const runRefreshingAction = async <Result,>(action: () => Promise<Result>): Promise<Result> => {
+  const runBusyAction = async <Result,>(action: () => Promise<Result>): Promise<Result> => {
     setBusy(true);
     setError(null);
     try {
-      const result = await action();
-      await refresh();
-      return result;
+      return await action();
     } finally {
       setBusy(false);
     }
@@ -94,7 +125,7 @@ function App() {
 
   const runAction = async (action: () => Promise<unknown>): Promise<boolean> => {
     try {
-      await runRefreshingAction(action);
+      await runBusyAction(action);
       return true;
     } catch (cause) {
       setError(displayError(cause));
@@ -113,11 +144,60 @@ function App() {
   };
 
   const saveRule = async (request: UpsertRouteRuleRequest): Promise<void> => {
-    await runRefreshingAction(() => desktopApi.upsertRouteRule(request));
+    await runBusyAction(() => desktopApi.upsertRouteRule(request));
   };
 
   const importProviders = (request: ImportCcSwitchRequest): Promise<ImportReport> =>
-    runRefreshingAction(() => desktopApi.importCcSwitchProviders(request));
+    runBusyAction(() => desktopApi.importCcSwitchProviders(request));
+
+  const changeWorkspaceProvider = async (providerId: string) => {
+    if (!clientSnapshot?.workspace) return;
+    try {
+      const snapshot = await clientFacade.setWorkspaceProvider(clientSnapshot.workspace.path, providerId);
+      applySnapshot(snapshot);
+    } catch (cause) {
+      setError(displayError(cause));
+    }
+  };
+
+  const startRuntime = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const snapshot = await clientFacade.startRuntime();
+      applySnapshot(snapshot);
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopRuntime = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const snapshot = await clientFacade.stopRuntime();
+      applySnapshot(snapshot);
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearDiagnostics = async () => {
+    try {
+      await clientFacade.clearDiagnostics();
+      setDiagnostics([]);
+      setClientSnapshot((current) => current && ({
+        ...current,
+        diagnostics: { unreadCount: 0, lastError: undefined },
+      }));
+    } catch (cause) {
+      setError(displayError(cause));
+    }
+  };
 
   const activate = async () => {
     const numericPort = Number(port);
@@ -167,12 +247,22 @@ function App() {
             className="brand-button"
             type="button"
             aria-label="Codex Route home"
-            onClick={() => changeView("providers")}
+            onClick={() => changeView("dashboard")}
           >
             <img className="brand-logo" src="/codex-route-logo.png" alt="" aria-hidden="true" />
           </button>
 
           <nav id="global-nav-links" className="global-nav-links" aria-label="Workspace view" role="tablist">
+            <button
+              className={`nav-link${activeView === "dashboard" ? " active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={activeView === "dashboard"}
+              onClick={() => changeView("dashboard")}
+            >
+              <LayoutDashboard size={14} aria-hidden="true" />
+              Overview
+            </button>
             <button
               className={`nav-link${activeView === "providers" ? " active" : ""}`}
               type="button"
@@ -226,7 +316,9 @@ function App() {
           <img className="brand-logo" src="/codex-route-logo.png" alt="" aria-hidden="true" />
           <div className="sub-nav-title-group">
             <strong>Codex Route</strong>
-            <span>{activeView === "providers" ? "Providers" : "Workspace rules"}</span>
+            <span>
+              {activeView === "dashboard" ? "Overview" : activeView === "providers" ? "Providers" : "Workspace rules"}
+            </span>
           </div>
           <div className="sub-nav-route">
             <span className={`route-context${statusModifier}`} role="status" aria-live="polite">
@@ -266,7 +358,33 @@ function App() {
       </div>
 
       <main className="app-content">
-        <section className={`workspace-heading product-tile ${activeView === "providers" ? "product-tile-light" : "product-tile-parchment"}`}>
+        {activeView === "dashboard" && !clientSnapshot && loading && (
+          <section className="client-dashboard client-dashboard-loading" aria-busy="true" aria-labelledby="dashboard-loading-heading">
+            <p className="eyebrow">CURRENT WORKSPACE</p>
+            <h2 id="dashboard-loading-heading">Initializing client…</h2>
+            <p className="dashboard-lead">Scanning Codex sessions and preparing the Route runtime.</p>
+          </section>
+        )}
+        {clientSnapshot && activeView === "dashboard" && (
+          <DashboardPage
+            snapshot={clientSnapshot}
+            onProviderChange={(providerId) => void changeWorkspaceProvider(providerId)}
+            onStartRuntime={() => void startRuntime()}
+            onStopRuntime={() => void stopRuntime()}
+            onOpenDiagnostics={() => setDiagnosticsOpen(true)}
+          />
+        )}
+        {clientSnapshot && activeView === "dashboard" && diagnosticsOpen && (
+          <DiagnosticsPanel
+            records={diagnostics}
+            onClose={() => setDiagnosticsOpen(false)}
+            onOpenProviders={() => { setDiagnosticsOpen(false); changeView("providers"); }}
+            onOpenWorkspaceRules={() => { setDiagnosticsOpen(false); changeView("rules"); }}
+            onOpenRuntime={() => { setDiagnosticsOpen(false); changeView("providers"); }}
+            onClear={() => void clearDiagnostics()}
+          />
+        )}
+        {activeView !== "dashboard" && <section className={`workspace-heading product-tile ${activeView === "providers" ? "product-tile-light" : "product-tile-parchment"}`}>
           <div className="workspace-heading-inner">
           <div>
             <p className="eyebrow">LOCAL WORKSPACE</p>
@@ -307,7 +425,7 @@ function App() {
             {currentProvider && <span className="current-provider">Using {currentProvider.name}</span>}
           </div>
         </div>
-        </section>
+        </section>}
 
         {error && (
           <div className="error-banner" role="alert">
@@ -318,7 +436,7 @@ function App() {
           </div>
         )}
 
-        <div className="workspace-content">
+        {activeView !== "dashboard" && <div className="workspace-content">
           {activeView === "providers" ? (
             <>
               <section className="route-panel-region product-tile product-tile-dark" aria-label="Route configuration">
@@ -358,7 +476,7 @@ function App() {
               />
             </section>
           )}
-        </div>
+        </div>}
       </main>
     </div>
   );

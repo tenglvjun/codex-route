@@ -5,7 +5,9 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build",
+    "build": "tauri build && node scripts/patch-dmg-volume-icons.mjs",
+    "build:macos": "tauri build --target universal-apple-darwin && node scripts/patch-dmg-volume-icons.mjs src-tauri/target/universal-apple-darwin",
+    "patch:dmg-volume-icons": "node scripts/patch-dmg-volume-icons.mjs",
     "test:renderer": "pnpm --dir ui test",
     "typecheck": "pnpm --dir ui typecheck",
     "build:renderer": "pnpm --dir ui build"

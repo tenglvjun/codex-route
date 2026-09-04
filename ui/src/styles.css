@@ -22,6 +22,11 @@
   --dark-hairline: rgb(255 255 255 / 14%);
   --light-hairline: rgb(0 0 0 / 8%);
   --product-shadow: 3px 5px 30px rgb(0 0 0 / 22%);
+  --rounded-sm: 8px;
+  --rounded-md: 11px;
+  --rounded-lg: 18px;
+  --rounded-pill: 9999px;
+  --primary-tint: rgb(0 102 204 / 8%);
   font-family: "SF Pro Text", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--canvas-parchment);
@@ -87,6 +92,36 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 .sub-nav-cta { min-height: 36px; margin-left: 8px; padding: 8px 15px; font-size: 14px; letter-spacing: -0.224px; line-height: 1.29; }
 
 .app-content { width: 100%; }
+.client-dashboard { width: min(100% - 40px, 980px); margin: 32px auto 0; border: 1px solid var(--hairline); border-radius: var(--rounded-lg); padding: 24px; background: var(--canvas); }
+.dashboard-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--hairline); padding-bottom: 24px; }
+.dashboard-heading h2 { max-width: 700px; overflow-wrap: anywhere; color: var(--ink); font-size: 28px; line-height: 1.2; }
+.client-dashboard-loading { min-height: 220px; }
+.dashboard-lead { margin: 8px 0 0; color: var(--ink-muted-48); font-size: 14px; }
+.dashboard-state { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; border-radius: var(--rounded-pill); padding: 8px 12px; color: var(--primary); background: var(--primary-tint); font-size: 12px; text-transform: capitalize; }
+.dashboard-state--degraded, .dashboard-state--failed, .dashboard-state--blocked_external_modification { color: var(--ink-muted-80); background: var(--surface-pearl); }
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 20px; }
+.dashboard-card { display: flex; min-width: 0; align-items: flex-start; gap: 12px; border: 1px solid var(--hairline); border-radius: var(--rounded-md); padding: 16px; background: var(--surface-pearl); }
+.dashboard-card-runtime { grid-column: 1 / -1; align-items: center; }
+.dashboard-card-icon { display: inline-flex; width: 32px; height: 32px; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: var(--rounded-pill); color: var(--primary); background: var(--canvas); }
+.dashboard-card > div:nth-child(2) { display: grid; min-width: 0; gap: 5px; }
+.dashboard-card .eyebrow { margin-bottom: 0; font-size: 10px; }
+.dashboard-card strong, .dashboard-card span, .dashboard-card label { overflow-wrap: anywhere; color: var(--ink-muted-80); font-size: 14px; line-height: 1.4; }
+.dashboard-card select { min-width: 0; border: 1px solid var(--hairline); border-radius: var(--rounded-sm); padding: 7px 10px; color: var(--ink); background: var(--canvas); font-size: 14px; }
+.dashboard-card-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.dashboard-card-actions .button-primary, .dashboard-card-actions .button-secondary-pill { min-height: 36px; padding: 8px 15px; font-size: 14px; }
+.diagnostics-panel { width: min(100% - 40px, 980px); margin: 24px auto 0; }
+.diagnostics-panel .panel-heading select { min-height: 44px; border: 1px solid var(--hairline); border-radius: var(--rounded-md); padding: 8px 12px; color: var(--ink); background: var(--canvas); font-size: 14px; }
+.diagnostics-list { display: grid; padding: 0 24px 24px; }
+.diagnostic-row { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 20px; border-top: 1px solid var(--hairline); padding: 16px 0; }
+.diagnostic-copy { min-width: 0; }
+.diagnostic-copy > div { display: flex; align-items: center; gap: 8px; }
+.diagnostic-copy strong { color: var(--ink); font-size: 14px; font-weight: 600; }
+.diagnostic-copy p { margin: 6px 0; color: var(--ink-muted-80); font-size: 14px; overflow-wrap: anywhere; }
+.diagnostic-copy .muted { color: var(--ink-muted-48); font-size: 12px; }
+.diagnostic-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+.diagnostic-severity { border-radius: var(--rounded-pill); padding: 4px 8px; color: var(--ink-muted-80); background: var(--surface-pearl); font-size: 11px; text-transform: uppercase; }
+.diagnostic-row--error .diagnostic-severity { color: var(--on-primary); background: var(--primary); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .product-tile { width: 100%; border-radius: 0; }
 .product-tile-light { color: var(--ink); background: var(--canvas); }
 .product-tile-parchment { color: var(--ink); background: var(--canvas-parchment); }
@@ -294,6 +329,11 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .form-grid { grid-template-columns: 1fr; }
   .form-submit { width: 100%; }
   .error-banner { width: calc(100% - 40px); align-items: flex-start; flex-direction: column; gap: 12px; }
+  .client-dashboard { width: calc(100% - 24px); margin-top: 24px; padding: 20px; }
+  .dashboard-heading { flex-direction: column; }
+  .dashboard-grid { grid-template-columns: 1fr; }
+  .dashboard-card-runtime { align-items: flex-start; flex-wrap: wrap; }
+  .dashboard-card-actions { width: 100%; margin-left: 44px; }
 }
 @media (max-width: 419px) {
   .sub-nav-route .route-context { display: none; }

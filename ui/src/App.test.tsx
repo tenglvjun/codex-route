@@ -3,7 +3,8 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { desktopApi, type LifecycleStatus, type ProviderSummary } from "./api";
+import { desktopApi, type ClientSnapshot, type LifecycleStatus, type ProviderSummary } from "./api";
+import { clientFacade } from "./clientFacade";
 import App from "./App";
 
 vi.mock("./api", () => ({
@@ -18,6 +19,25 @@ vi.mock("./api", () => ({
     removeRouteRule: vi.fn(),
     activateRoute: vi.fn(),
     deactivateRoute: vi.fn(),
+    getClientSnapshot: vi.fn(),
+    getDiagnostics: vi.fn(),
+    startRuntime: vi.fn(),
+    stopRuntime: vi.fn(),
+    setWorkspaceProvider: vi.fn(),
+    clearDiagnostics: vi.fn(),
+  },
+}));
+
+vi.mock("./clientFacade", () => ({
+  clientFacade: {
+    loadSnapshot: vi.fn(),
+    getDiagnostics: vi.fn(),
+    subscribe: vi.fn(),
+    subscribeDiagnostics: vi.fn(),
+    startRuntime: vi.fn(),
+    stopRuntime: vi.fn(),
+    setWorkspaceProvider: vi.fn(),
+    clearDiagnostics: vi.fn(),
   },
 }));
 
@@ -39,6 +59,35 @@ const inactiveStatus: LifecycleStatus = {
   lockPath: "/tmp/route.lock",
 };
 
+const clientSnapshot: ClientSnapshot = {
+  schemaVersion: 1,
+  sequence: 1,
+  generatedAt: 1,
+  codex: {
+    home: "/tmp/.codex",
+    configPath: "/tmp/.codex/config.toml",
+    installed: true,
+    configExists: true,
+    configManaged: false,
+    externalModification: false,
+  },
+  workspace: undefined,
+  provider,
+  providers: [provider],
+  rules: [],
+  runtime: {
+    phase: "stopped",
+    active: false,
+    serverReachable: false,
+    configManaged: false,
+    externalModification: false,
+    restartCount: 0,
+    updatedAt: 1,
+    sequence: 1,
+  },
+  diagnostics: { unreadCount: 0 },
+};
+
 afterEach(cleanup);
 
 describe("App", () => {
@@ -47,16 +96,24 @@ describe("App", () => {
     vi.mocked(desktopApi.listProviders).mockResolvedValue([provider]);
     vi.mocked(desktopApi.listRouteRules).mockResolvedValue([]);
     vi.mocked(desktopApi.getLifecycleStatus).mockResolvedValue(inactiveStatus);
+    vi.mocked(clientFacade.loadSnapshot).mockResolvedValue(clientSnapshot);
+    vi.mocked(clientFacade.getDiagnostics).mockResolvedValue([]);
+    vi.mocked(clientFacade.subscribe).mockResolvedValue(vi.fn());
+    vi.mocked(clientFacade.subscribeDiagnostics).mockResolvedValue(vi.fn());
   });
 
   it("renders the desktop client toolbar and provider workspace", async () => {
+    const user = userEvent.setup();
     render(<App />);
 
     expect(screen.getByRole("main")).toBeTruthy();
     expect(screen.getByRole("banner", { name: "Codex Route navigation" })).toBeTruthy();
     expect(document.querySelectorAll("img.brand-logo")).toHaveLength(2);
-    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tab", { name: "Workspace rules" }).getAttribute("aria-selected")).toBe("false");
+    expect(await screen.findByRole("heading", { name: "No Codex workspace detected" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
     expect(await screen.findByRole("heading", { name: "Default fallback provider" })).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Activate route" }).getAttribute("data-route-state")).toBe(
       "inactive",
@@ -66,6 +123,7 @@ describe("App", () => {
   it("rejects an invalid route port before invoking Tauri", async () => {
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
     await screen.findByRole("heading", { name: "Default fallback provider" });
 
     const port = screen.getByLabelText("Port");
@@ -99,6 +157,7 @@ describe("App", () => {
     });
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
     await screen.findByRole("heading", { name: "Default fallback provider" });
 
     await user.click(screen.getByRole("button", { name: "Import providers" }));

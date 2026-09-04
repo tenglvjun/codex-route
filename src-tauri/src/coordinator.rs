@@ -6,7 +6,6 @@ use codex_route::cc_switch_import::{CcSwitchImporter, ImportScan};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
-use tokio::task::JoinHandle;
 
 pub fn should_auto_start(settings: &ClientSettings) -> bool {
     settings.auto_start && settings.startup_consent_granted
@@ -26,8 +25,8 @@ impl<R: Runtime> ClientCoordinator<R> {
         crate::commands::build_client_snapshot(&self.state).await
     }
 
-    pub fn start(self) -> JoinHandle<()> {
-        tokio::spawn(async move { self.run().await })
+    pub fn start(self) -> tauri::async_runtime::JoinHandle<()> {
+        tauri::async_runtime::spawn(async move { self.run().await })
     }
 
     async fn run(self) {
@@ -114,7 +113,10 @@ impl<R: Runtime> ClientCoordinator<R> {
     }
 }
 
-pub fn start<R: Runtime>(state: Arc<AppState>, app: AppHandle<R>) -> JoinHandle<()> {
+pub fn start<R: Runtime>(
+    state: Arc<AppState>,
+    app: AppHandle<R>,
+) -> tauri::async_runtime::JoinHandle<()> {
     ClientCoordinator::new(state, app).start()
 }
 

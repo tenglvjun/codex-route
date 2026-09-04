@@ -14,8 +14,17 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindow, Windo
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
+#[cfg(target_os = "macos")]
+fn hide_window_title<R: Runtime>(window: &WebviewWindow<R>) {
+    if let Err(error) = window.set_title("") {
+        log::warn!(target: "desktop", "failed to hide macOS window title: {error}");
+    }
+}
+
 fn get_or_create_main_window<R: Runtime>(app_handle: &AppHandle<R>) -> Option<WebviewWindow<R>> {
     if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+        #[cfg(target_os = "macos")]
+        hide_window_title(&window);
         return Some(window);
     }
 
@@ -30,7 +39,11 @@ fn get_or_create_main_window<R: Runtime>(app_handle: &AppHandle<R>) -> Option<We
     match tauri::WebviewWindowBuilder::from_config(app_handle, &config)
         .and_then(|builder| builder.build())
     {
-        Ok(window) => Some(window),
+        Ok(window) => {
+            #[cfg(target_os = "macos")]
+            hide_window_title(&window);
+            Some(window)
+        }
         Err(error) => {
             eprintln!("failed to recreate the main window: {error}");
             None

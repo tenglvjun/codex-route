@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, FolderTree, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, FolderOpen, FolderTree, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ProviderSummary, UpsertRouteRuleRequest, WorkspaceRouteRule } from "../api";
 import { displayError } from "../errors";
 
@@ -11,7 +11,6 @@ type WorkspaceRulesPanelProps = {
   onSave: (request: UpsertRouteRuleRequest) => Promise<void>;
   onRemove: (workspace: string) => Promise<boolean>;
   onError: (message: string) => void;
-  onClose?: () => void;
 };
 
 type FormErrors = {
@@ -20,11 +19,6 @@ type FormErrors = {
   form?: string;
 };
 
-function formatDate(timestamp: number) {
-  if (!timestamp) return "Unknown";
-  return new Date(timestamp * 1000).toLocaleString();
-}
-
 export function WorkspaceRulesPanel({
   providers,
   rules,
@@ -32,11 +26,11 @@ export function WorkspaceRulesPanel({
   onSave,
   onRemove,
   onError,
-  onClose,
 }: WorkspaceRulesPanelProps) {
   const [workspace, setWorkspace] = useState("");
   const [providerId, setProviderId] = useState("");
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const formErrorRef = useRef<HTMLParagraphElement>(null);
 
@@ -53,11 +47,24 @@ export function WorkspaceRulesPanel({
     if (errors.form) formErrorRef.current?.focus();
   }, [errors.form]);
 
+  useEffect(() => {
+    if (formOpen) document.getElementById("workspace-rule-provider")?.focus();
+  }, [formOpen]);
+
   const resetForm = () => {
     setWorkspace("");
     setProviderId("");
     setEditingWorkspace(null);
     setErrors({});
+    setFormOpen(false);
+  };
+
+  const openCreateForm = () => {
+    setWorkspace("");
+    setProviderId("");
+    setEditingWorkspace(null);
+    setErrors({});
+    setFormOpen(true);
   };
 
   const editRule = (rule: WorkspaceRouteRule) => {
@@ -65,7 +72,7 @@ export function WorkspaceRulesPanel({
     setProviderId(rule.providerId);
     setEditingWorkspace(rule.workspace);
     setErrors({});
-    document.getElementById("workspace-rule-provider")?.focus();
+    setFormOpen(true);
   };
 
   const chooseWorkspace = async () => {
@@ -139,35 +146,30 @@ export function WorkspaceRulesPanel({
   return (
     <section className="panel rules-panel" aria-labelledby="rules-heading">
       <div className="panel-heading">
-        <div>
-          <p className="eyebrow">WORKSPACE ROUTING</p>
-          <h2 id="rules-heading">Project provider rules</h2>
+        <div className="panel-heading-title">
+          <h2 id="rules-heading">Workspace rules</h2>
+          <span className="count">{rules.length}</span>
         </div>
         <div className="panel-heading-actions">
-          <span className="count">{rules.length}</span>
-          {onClose && (
-            <button
-              type="button"
-              className="icon-button panel-close-button"
-              onClick={onClose}
-              aria-label="Close workspace rules"
-              title="Close workspace rules"
-            >
-              <X size={18} aria-hidden="true" />
-            </button>
-          )}
+          <button
+            className="button-primary panel-add-button"
+            type="button"
+            onClick={openCreateForm}
+            disabled={busy || providers.length === 0}
+          >
+            <Plus size={16} aria-hidden="true" />
+            Add rule
+          </button>
         </div>
       </div>
 
-      <form className="rule-form rules-form-surface" onSubmit={submitRule} noValidate>
+      {formOpen && <form className="rule-form rules-form-surface" onSubmit={submitRule} noValidate>
         <div className="form-heading">
-          <strong>{editingWorkspace ? "Edit workspace rule" : "Add workspace rule"}</strong>
-          {editingWorkspace && (
-            <button type="button" className="text-button" onClick={resetForm} disabled={busy}>
-              <X size={14} aria-hidden="true" />
-              Cancel edit
-            </button>
-          )}
+          <strong>{editingWorkspace ? "Edit rule" : "New rule"}</strong>
+          <button type="button" className="text-button" onClick={resetForm} disabled={busy}>
+            <X size={14} aria-hidden="true" />
+            Cancel
+          </button>
         </div>
         <div className="form-grid">
           <div className="field workspace-field">
@@ -225,8 +227,8 @@ export function WorkspaceRulesPanel({
             )}
           </div>
           <button className="button primary form-submit" type="submit" disabled={busy || providers.length === 0}>
-            {editingWorkspace ? <Pencil size={15} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}
-            {editingWorkspace ? "Save rule" : "Add rule"}
+            <Check size={15} aria-hidden="true" />
+            Save
           </button>
         </div>
         {errors.form && (
@@ -234,14 +236,14 @@ export function WorkspaceRulesPanel({
             {errors.form}
           </p>
         )}
-      </form>
+      </form>}
 
       {rules.length === 0 ? (
         <div className="empty-state rules-empty-state" role="status">
           <FolderTree size={30} aria-hidden="true" />
           <div>
             <strong>No workspace rules</strong>
-            <p className="muted">Add a workspace route to choose its default provider.</p>
+            {providers.length === 0 && <p className="muted">Add a provider first.</p>}
           </div>
         </div>
       ) : (
@@ -251,7 +253,7 @@ export function WorkspaceRulesPanel({
               <div className="rule-details rule-meta">
                 <strong>{rule.workspace}</strong>
                 <span className="muted">
-                  {providerNames.get(rule.providerId) || rule.providerId} · Updated {formatDate(rule.updatedAt)}
+                  {providerNames.get(rule.providerId) || rule.providerId}
                 </span>
               </div>
               <div className="row-actions rule-actions">

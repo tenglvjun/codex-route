@@ -28,6 +28,7 @@ const snapshot = (sequence: number): ClientSnapshot => ({
     configManaged: false,
     externalModification: false,
   },
+  workspaces: [],
   providers: [],
   rules: [],
   runtime: {
@@ -67,13 +68,13 @@ describe("clientFacade", () => {
     const unsubscribe = await subscribe(listener);
 
     expect(desktopApi.getClientSnapshot).toHaveBeenCalledOnce();
-    expect(listen).toHaveBeenCalledTimes(4);
+    expect(listen).toHaveBeenCalledTimes(3);
     unsubscribe();
     expect([...unlisteners.values()].every((unlisten) => unlisten.mock.calls.length === 1)).toBe(true);
     expect(await clientFacade.getSnapshot()).toEqual(snapshot(1));
   });
 
-  it("merges runtime and workspace events and ignores stale sequences", async () => {
+  it("merges runtime events and ignores stale sequences", async () => {
     await loadSnapshot();
     const listener = vi.fn();
     const unsubscribe = await subscribe(listener);
@@ -92,16 +93,10 @@ describe("clientFacade", () => {
         event: { type: "statusChanged", snapshot: snapshot(1).runtime },
       },
     });
-    callbacks.get("workspace-changed")?.({
-      payload: {
-        sequence: 3,
-        generatedAt: 4,
-        workspace: { path: "/tmp/project", exists: true, sessionId: "session-1", threadIds: [], conflictingWorkspaces: false },
-      },
-    });
+    callbacks.get("client-snapshot-updated")?.({ payload: { ...snapshot(3), generatedAt: 4 } });
 
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener.mock.calls.at(-1)?.[0]).toMatchObject({ sequence: 3, workspace: { path: "/tmp/project" } });
+    expect(listener.mock.calls.at(-1)?.[0]).toMatchObject({ sequence: 3 });
     unsubscribe();
   });
 

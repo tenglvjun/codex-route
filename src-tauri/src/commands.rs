@@ -152,15 +152,7 @@ pub async fn set_workspace_provider(
     })
     .await
     .map_err(|error| format!("workspace provider command failed: {error}"))??;
-    let snapshot = emit_snapshot(&app, &state).await?;
-    let payload = serde_json::json!({
-        "sequence": snapshot.sequence,
-        "generatedAt": snapshot.generated_at,
-        "workspace": &snapshot.workspace,
-    });
-    app.emit("workspace-changed", payload)
-        .map_err(|error| format!("failed to emit workspace change: {error}"))?;
-    Ok(snapshot)
+    emit_snapshot(&app, &state).await
 }
 
 #[tauri::command]

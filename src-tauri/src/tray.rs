@@ -223,6 +223,7 @@ mod tests {
                 config_managed: false,
                 external_modification: false,
             },
+            workspaces: Vec::new(),
             workspace: None,
             provider: providers.first().cloned(),
             providers,

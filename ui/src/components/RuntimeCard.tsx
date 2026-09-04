@@ -3,13 +3,13 @@ import type { ClientSnapshot } from "../api";
 
 function runtimeCopy(snapshot: ClientSnapshot) {
   switch (snapshot.runtime.phase) {
-    case "running": return "Route is running and ready for Codex requests.";
-    case "starting": return "Starting the local Route runtime…";
-    case "recovering": return "Route stopped unexpectedly. Attempting recovery.";
-    case "blocked_external_modification": return "Codex config changed outside Codex Route.";
-    case "failed": return snapshot.runtime.lastError || "Route could not be started.";
-    case "degraded": return snapshot.runtime.lastError || "Route needs attention.";
-    default: return "Route is not running.";
+    case "running": return "Ready";
+    case "starting": return "Starting…";
+    case "recovering": return "Recovering…";
+    case "blocked_external_modification": return "Protected";
+    case "failed": return snapshot.runtime.lastError || "Failed";
+    case "degraded": return snapshot.runtime.lastError || "Needs attention";
+    default: return "Stopped";
   }
 }
 
@@ -25,7 +25,7 @@ export function RuntimeCard({ snapshot, onStart, onStop, onOpenDiagnostics }: Ru
   return (
     <div className="dashboard-card dashboard-card-runtime">
       <div className="dashboard-card-icon" aria-hidden="true"><Wrench size={18} /></div>
-      <div><p className="eyebrow">RUNTIME</p><strong>{runtimeCopy(snapshot)}</strong><span>{snapshot.runtime.port ? `Listening on 127.0.0.1:${snapshot.runtime.port}` : "No local listener"}</span></div>
+      <div><strong>{runtimeCopy(snapshot)}</strong><span>{snapshot.runtime.port ? `127.0.0.1:${snapshot.runtime.port}` : "No listener"}</span></div>
       <div className="dashboard-card-actions">
         {snapshot.runtime.active
           ? <button className="button-secondary-pill" type="button" onClick={onStop}>Stop Route</button>

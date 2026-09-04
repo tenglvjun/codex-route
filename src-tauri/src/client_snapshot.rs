@@ -1,6 +1,6 @@
 use crate::runtime::RuntimeSnapshot;
 use codex_route::config::ScanConfig;
-use codex_route::index::SessionWorkspaceIndex;
+use codex_route::index::{SessionWorkspaceIndex, WorkspaceAggregate};
 use codex_route::provider::{Provider, ProviderSummary};
 use codex_route::provider_store::ProviderStore;
 use codex_route::workspace_rule::WorkspaceRouteRule;
@@ -28,6 +28,7 @@ pub struct WorkspaceSnapshot {
     pub path: PathBuf,
     pub exists: bool,
     pub session_id: String,
+    pub session_ids: Vec<String>,
     pub thread_ids: Vec<String>,
     pub provider_id: Option<String>,
     pub last_activity: Option<i64>,
@@ -48,6 +49,9 @@ pub struct ClientSnapshot {
     pub sequence: u64,
     pub generated_at: i64,
     pub codex: CodexStatus,
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceSnapshot>,
+    /// The most recent workspace is retained for older renderer clients.
     pub workspace: Option<WorkspaceSnapshot>,
     pub provider: Option<ProviderSummary>,
     pub providers: Vec<ProviderSummary>,
@@ -71,17 +75,9 @@ impl ClientSnapshot {
             .list_route_rules()
             .map_err(|error| error.to_string())?;
         let current_provider = provider_records.iter().find(|provider| provider.is_current);
-        let workspace = latest_workspace(scan_config, &rules, &provider_records);
-        let effective_provider = workspace
-            .as_ref()
-            .and_then(|workspace| workspace.provider_id.as_deref())
-            .and_then(|provider_id| {
-                provider_records
-                    .iter()
-                    .find(|provider| provider.id == provider_id)
-            })
-            .or(current_provider)
-            .map(ProviderSummary::from);
+        let workspaces = workspace_snapshots(scan_config, &rules, &provider_records);
+        let workspace = workspaces.first().cloned();
+        let default_provider = current_provider.map(ProviderSummary::from);
         let codex = detect_codex(scan_config, &runtime);
         let diagnostics = DiagnosticsSummary {
             unread_count: usize::from(runtime.last_error.is_some()),
@@ -93,8 +89,9 @@ impl ClientSnapshot {
             sequence: runtime.sequence,
             generated_at: now_unix_seconds(),
             codex,
+            workspaces,
             workspace,
-            provider: effective_provider,
+            provider: default_provider,
             providers,
             rules,
             runtime,
@@ -103,38 +100,46 @@ impl ClientSnapshot {
     }
 }
 
-fn latest_workspace(
+fn workspace_snapshots(
     scan_config: &ScanConfig,
     rules: &[WorkspaceRouteRule],
     providers: &[Provider],
-) -> Option<WorkspaceSnapshot> {
-    let index = SessionWorkspaceIndex::build(scan_config).ok()?;
-    let lookup = index.latest_workspace()?;
+) -> Vec<WorkspaceSnapshot> {
+    let Ok(index) = SessionWorkspaceIndex::build_active(scan_config) else {
+        return Vec::new();
+    };
+    index
+        .workspaces()
+        .into_iter()
+        .map(|aggregate| workspace_snapshot(aggregate, rules, providers))
+        .collect()
+}
+
+fn workspace_snapshot(
+    aggregate: WorkspaceAggregate,
+    rules: &[WorkspaceRouteRule],
+    providers: &[Provider],
+) -> WorkspaceSnapshot {
     let provider_id = rules
         .iter()
-        .find(|rule| rule.workspace == lookup.workspace)
+        .find(|rule| rule.workspace == aggregate.workspace)
         .and_then(|rule| {
             providers
                 .iter()
                 .any(|provider| provider.id == rule.provider_id)
                 .then(|| rule.provider_id.clone())
         });
-    let last_activity = lookup
-        .rollout_paths
-        .iter()
-        .filter_map(|path| std::fs::metadata(path).ok()?.modified().ok())
-        .filter_map(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as i64)
-        .max();
-    Some(WorkspaceSnapshot {
-        path: lookup.workspace.clone(),
-        exists: lookup.workspace_exists,
-        session_id: lookup.session_id,
-        thread_ids: lookup.thread_ids,
+    let session_id = aggregate.session_ids.first().cloned().unwrap_or_default();
+    WorkspaceSnapshot {
+        path: aggregate.workspace,
+        exists: aggregate.workspace_exists,
+        session_id,
+        session_ids: aggregate.session_ids,
+        thread_ids: aggregate.thread_ids,
         provider_id,
-        last_activity,
-        conflicting_workspaces: lookup.conflicting_workspaces,
-    })
+        last_activity: aggregate.last_activity,
+        conflicting_workspaces: aggregate.conflicting_sessions,
+    }
 }
 
 fn detect_codex(scan_config: &ScanConfig, runtime: &RuntimeSnapshot) -> CodexStatus {
@@ -192,6 +197,7 @@ mod tests {
                 config_managed: false,
                 external_modification: false,
             },
+            workspaces: Vec::new(),
             workspace: None,
             provider: None,
             providers: Vec::new(),

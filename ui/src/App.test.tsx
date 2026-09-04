@@ -71,6 +71,7 @@ const clientSnapshot: ClientSnapshot = {
     configManaged: false,
     externalModification: false,
   },
+  workspaces: [],
   workspace: undefined,
   provider,
   providers: [provider],
@@ -108,31 +109,26 @@ describe("App", () => {
 
     expect(screen.getByRole("main")).toBeTruthy();
     expect(screen.getByRole("banner", { name: "Codex Route navigation" })).toBeTruthy();
-    expect(document.querySelectorAll("img.brand-logo")).toHaveLength(2);
+    expect(document.querySelectorAll("img.brand-logo")).toHaveLength(1);
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tab", { name: "Workspace rules" }).getAttribute("aria-selected")).toBe("false");
-    expect(await screen.findByRole("heading", { name: "No Codex workspace detected" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Workspace routes" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Providers" }));
-    expect(await screen.findByRole("heading", { name: "Default fallback provider" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Providers", level: 2 })).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Activate route" }).getAttribute("data-route-state")).toBe(
       "inactive",
     );
   });
 
-  it("rejects an invalid route port before invoking Tauri", async () => {
+  it("activates the route from the global toggle with the default port", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("tab", { name: "Providers" }));
-    await screen.findByRole("heading", { name: "Default fallback provider" });
+    const routeToggle = await screen.findByRole("switch", { name: "Activate route" });
 
-    const port = screen.getByLabelText("Port");
-    await user.clear(port);
-    await user.type(port, "0");
-    await user.click(screen.getByRole("button", { name: "Activate" }));
+    await user.click(routeToggle);
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("between 1 and 65535"));
-    expect(desktopApi.activateRoute).not.toHaveBeenCalled();
+    await waitFor(() => expect(desktopApi.activateRoute).toHaveBeenCalledWith(16729));
   });
 
   it("scans automatically and imports the selected providers", async () => {
@@ -158,9 +154,9 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("tab", { name: "Providers" }));
-    await screen.findByRole("heading", { name: "Default fallback provider" });
+    await screen.findByRole("heading", { name: "Providers", level: 2 });
 
-    await user.click(screen.getByRole("button", { name: "Import providers" }));
+    await user.click(screen.getByRole("button", { name: "Import providers from cc-switch" }));
     expect(await screen.findByRole("dialog", { name: "Import from cc-switch" })).toBeTruthy();
     expect(desktopApi.scanCcSwitchProviders).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("checkbox", { name: /Provider B/ }));

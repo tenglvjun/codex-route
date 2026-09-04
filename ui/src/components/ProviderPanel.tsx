@@ -149,13 +149,10 @@ export function ProviderPanel({
   return (
     <section className="panel" aria-labelledby="providers-heading">
       <div className="panel-heading">
-        <div>
-          <p className="eyebrow">PROVIDERS</p>
-          <h2 id="providers-heading">Default fallback provider</h2>
+        <div className="panel-heading-title">
+          <h2 id="providers-heading">Providers</h2>
+          <span className="count">{providers.length}</span>
         </div>
-        <span className="count">{providers.length}</span>
-      </div>
-      <div className="provider-toolbar provider-import">
         <button
           className="button secondary provider-import-trigger"
           type="button"
@@ -164,9 +161,10 @@ export function ProviderPanel({
           aria-haspopup="dialog"
           aria-expanded={importDialogOpen}
           aria-controls="cc-switch-import-dialog"
+          aria-label="Import providers from cc-switch"
         >
           <FileInput size={16} aria-hidden="true" />
-          Import cc-switch
+          Import
         </button>
       </div>
 
@@ -338,10 +336,9 @@ export function ProviderPanel({
           <span className="empty-state-icon" aria-hidden="true"><Server size={20} /></span>
           <div>
             <strong>No providers yet</strong>
-            <p className="muted">No provider is available for local requests.</p>
             <button className="button-primary empty-action" type="button" onClick={() => setImportDialogOpen(true)} disabled={busy || importing}>
               <FileInput size={15} aria-hidden="true" />
-              Import from cc-switch
+              Import
             </button>
           </div>
         </div>
@@ -355,11 +352,10 @@ export function ProviderPanel({
               data-provider-current={provider.isCurrent ? "true" : "false"}
             >
               <div className="provider-summary">
-                <span className="provider-icon" aria-hidden="true"><Server size={18} /></span>
                 <span className={`provider-status-dot${provider.isCurrent ? " active" : ""}`} aria-hidden="true" />
                 <div>
                   <strong>{provider.name}</strong>
-                  <span className="muted">{provider.id} · {provider.source}</span>
+                  <span className="muted">{provider.source}</span>
                 </div>
               </div>
               <button

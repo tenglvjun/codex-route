@@ -135,3 +135,26 @@ fn unknown_session_is_distinct_from_empty_session_id() {
     );
     assert_eq!(index.resolve("  "), Err(ResolveError::EmptySessionId));
 }
+
+#[test]
+fn active_index_excludes_archived_session_ids() {
+    let home = TempDir::new().expect("temporary home should be created");
+    let workspace = home.path().join("project");
+    write_rollout(
+        home.path(),
+        "archived_sessions",
+        "rollout-archived.jsonl",
+        "ARCHIVED",
+        "TA",
+        &workspace,
+        "2026-01-03T00:00:00Z",
+    );
+    let config = ScanConfig {
+        codex_home: home.path().to_path_buf(),
+        max_rollout_bytes: 64 * 1024,
+    };
+
+    let index = SessionWorkspaceIndex::build_active(&config).expect("index should build");
+    assert!(index.session_ids().is_empty());
+    assert!(index.workspaces().is_empty());
+}

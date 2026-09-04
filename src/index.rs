@@ -110,6 +110,34 @@ impl SessionWorkspaceIndex {
             conflicting_workspaces,
         })
     }
+
+    /// Returns the workspace for the most recently modified active session.
+    /// Archived sessions are considered only when no active session exists.
+    pub fn latest_workspace(&self) -> Option<WorkspaceLookup> {
+        let latest_active = self
+            .sessions
+            .values()
+            .flatten()
+            .filter(|record| !record.archived)
+            .max_by(|left, right| compare_recency(left, right));
+        let latest = latest_active.or_else(|| {
+            self.sessions
+                .values()
+                .flatten()
+                .max_by(|left, right| compare_recency(left, right))
+        })?;
+        self.resolve(&latest.session_id).ok()
+    }
+}
+
+fn compare_recency(left: &RolloutSessionMeta, right: &RolloutSessionMeta) -> Ordering {
+    match (left.modified_at, right.modified_at) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => left.timestamp.cmp(&right.timestamp),
+    }
+    .then_with(|| left.rollout_path.cmp(&right.rollout_path))
 }
 
 fn compare_records(left: &RolloutSessionMeta, right: &RolloutSessionMeta) -> Ordering {
@@ -207,6 +235,36 @@ mod tests {
         assert_eq!(result.workspace, old_workspace);
         assert_eq!(result.workspaces, vec![new_workspace, old_workspace]);
         assert!(result.conflicting_workspaces);
+    }
+
+    #[test]
+    fn latest_workspace_prefers_recent_active_session() {
+        let old_workspace = fixture_path("old-active");
+        let new_workspace = fixture_path("new-active");
+        let archived_workspace = fixture_path("newer-archived");
+        let mut archived = record(
+            "ARCHIVED",
+            "TA",
+            &archived_workspace,
+            "2026-01-03T00:00:00Z",
+        );
+        archived.archived = true;
+        archived.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(30));
+        let mut old = record("OLD", "T1", &old_workspace, "2026-01-01T00:00:00Z");
+        old.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+        let mut new = record("NEW", "T2", &new_workspace, "2026-01-02T00:00:00Z");
+        new.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(20));
+        let index = SessionWorkspaceIndex {
+            sessions: BTreeMap::from([
+                ("ARCHIVED".to_string(), vec![archived]),
+                ("OLD".to_string(), vec![old]),
+                ("NEW".to_string(), vec![new]),
+            ]),
+        };
+
+        let latest = index.latest_workspace().expect("latest workspace");
+        assert_eq!(latest.session_id, "NEW");
+        assert_eq!(latest.workspace, new_workspace);
     }
 
     #[test]

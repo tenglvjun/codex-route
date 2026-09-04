@@ -1,9 +1,13 @@
 # codex-route
 
-`codex-route` currently provides a local, read-only utility for listing Codex
-sessions and resolving a Codex `session_id` to the workspace recorded in Codex
-rollout metadata. This is the first milestone of the future workspace-aware LLM
-gateway.
+`codex-route` is a native desktop client and local Responses route for Codex. It
+keeps provider credentials in its local store, discovers the active Workspace
+from Codex rollout metadata, and supervises the loopback route independently of
+the renderer.
+
+The desktop client opens on a Workspace overview. It shows the current Session,
+selected Provider, Route health, and recent diagnostics. Provider and Workspace
+management remain available as secondary views.
 
 ## Current MVP
 
@@ -104,6 +108,15 @@ Repeated imports match the source provider ID. `--on-conflict` accepts
 overwritten. This milestone does not modify Codex `config.toml`/`auth.json`
 and does not modify Codex live files.
 
+### Desktop import
+
+The desktop **Import cc-switch** action scans the default cc-switch database
+automatically at `$HOME/.cc-switch/cc-switch.db`; users never need to locate the
+file manually. Valid Codex providers are listed in a selection dialog (all are
+selected by default), while malformed or unsupported rows are explained in the
+result. The import is read-only against cc-switch and only selected providers
+are copied into the codex-route store.
+
 ## Local Responses Route
 
 Start the loopback route using the current stored provider and optional
@@ -150,6 +163,20 @@ cargo run -- route rule remove \
 Adding an existing workspace requires `--replace`. Rules store normalized
 absolute paths and can reference only providers already in the local store.
 
+## Desktop runtime
+
+The packaged app owns an embedded Route runtime. After the first explicit
+start approval, the runtime can start automatically on launch and is health
+checked in the background. Unexpected exits are retried with a bounded restart
+budget; an externally modified Codex `config.toml` moves the runtime to a
+protected state and never gets overwritten automatically.
+
+The app is single-instance. Closing the main window hides it to the system tray;
+the tray can show the window, start/stop Route, and quit (quitting restores the
+managed Codex configuration). Window position and size are persisted between
+launches, and native logs are written under the app config directory's `logs/`
+folder. Structured diagnostics are also available from the Workspace overview.
+
 ## Selection Rules
 
 - Multiple threads with the same `session_id` are treated as one project.
@@ -166,8 +193,9 @@ This milestone does not read `state_5.sqlite`, run a background session watcher,
 parse `X-Codex-Turn-Metadata`, proxy WebSocket traffic, or infer parent
 workspaces from `forked_from_thread_id`. Each routed request builds a fresh
 bounded read-only snapshot. The lookup library is separated from the CLI so
-the route can reuse the provider store directly. There is no UI in this MVP
-slice.
+the route can reuse the provider store directly. The desktop client currently
+does not translate Chat Completions or Anthropic requests, proxy WebSockets, or
+provide request-level retries/failover.
 
 Exit codes are stable for automation:
 

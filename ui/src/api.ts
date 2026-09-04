@@ -1,5 +1,81 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type RuntimePhase =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "degraded"
+  | "recovering"
+  | "blocked_external_modification"
+  | "failed";
+
+export type RuntimeSnapshot = {
+  phase: RuntimePhase;
+  active: boolean;
+  pid?: number;
+  port?: number;
+  serverReachable: boolean;
+  configManaged: boolean;
+  externalModification: boolean;
+  lastError?: string;
+  restartCount: number;
+  updatedAt: number;
+  sequence: number;
+};
+
+export type CodexStatus = {
+  home: string;
+  configPath: string;
+  installed: boolean;
+  version?: string;
+  configExists: boolean;
+  configManaged: boolean;
+  externalModification: boolean;
+};
+
+export type WorkspaceSnapshot = {
+  path: string;
+  exists: boolean;
+  sessionId: string;
+  threadIds: string[];
+  providerId?: string;
+  lastActivity?: number;
+  conflictingWorkspaces: boolean;
+};
+
+export type DiagnosticsSummary = {
+  unreadCount: number;
+  lastError?: string;
+};
+
+export type ClientSnapshot = {
+  schemaVersion: number;
+  sequence: number;
+  generatedAt: number;
+  codex: CodexStatus;
+  workspace?: WorkspaceSnapshot;
+  provider?: ProviderSummary;
+  providers: ProviderSummary[];
+  rules: WorkspaceRouteRule[];
+  runtime: RuntimeSnapshot;
+  diagnostics: DiagnosticsSummary;
+};
+
+export type ClientSettings = {
+  autoStart: boolean;
+  startupConsentGranted: boolean;
+};
+
+export type DiagnosticRecord = {
+  id: number;
+  timestamp: number;
+  severity: "info" | "warning" | "error";
+  code: string;
+  message: string;
+  source: string;
+  context: Record<string, string>;
+};
+
 export type ProviderSummary = {
   id: string;
   name: string;
@@ -79,6 +155,19 @@ export type CcSwitchScanReport = {
 };
 
 export const desktopApi = {
+  getClientSnapshot: () => invoke<ClientSnapshot>("get_client_snapshot"),
+  getClientSettings: () => invoke<ClientSettings>("get_client_settings"),
+  setClientSettings: (settings: ClientSettings) =>
+    invoke<ClientSettings>("set_client_settings", { settings }),
+  startRuntime: () => invoke<ClientSnapshot>("start_runtime"),
+  stopRuntime: () => invoke<ClientSnapshot>("stop_runtime"),
+  setWorkspaceProvider: (workspace: string, providerId: string) =>
+    invoke<ClientSnapshot>("set_workspace_provider", {
+      request: { workspace, providerId },
+    }),
+  getDiagnostics: (limit?: number) =>
+    invoke<DiagnosticRecord[]>("get_diagnostics", { limit }),
+  clearDiagnostics: () => invoke<void>("clear_diagnostics"),
   listProviders: () => invoke<ProviderSummary[]>("list_providers"),
   setCurrentProvider: (providerId: string) =>
     invoke<ProviderSummary>("set_current_provider", { providerId }),

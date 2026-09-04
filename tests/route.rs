@@ -38,6 +38,30 @@ fn write_rollout(home: &std::path::Path, session_id: &str, thread_id: &str, cwd:
     std::fs::write(path, format!("{line}\n")).unwrap();
 }
 
+fn write_archived_rollout(
+    home: &std::path::Path,
+    session_id: &str,
+    thread_id: &str,
+    cwd: &std::path::Path,
+) {
+    let directory = home.join("archived_sessions/2026/09/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("rollout-{thread_id}.jsonl"));
+    let line = json!({
+        "timestamp": "2026-09-03T12:00:00.000Z",
+        "type": "session_meta",
+        "payload": {
+            "session_id": session_id,
+            "id": thread_id,
+            "timestamp": "2026-09-03T12:00:00Z",
+            "cwd": cwd.to_string_lossy(),
+            "originator": "codex",
+            "cli_version": "test"
+        }
+    });
+    std::fs::write(path, format!("{line}\n")).unwrap();
+}
+
 #[derive(Clone, Default)]
 struct Capture {
     authorization: Arc<Mutex<Option<String>>>,
@@ -508,6 +532,68 @@ async fn conflicting_or_missing_workspaces_fall_back_to_current_provider() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
     }
+    assert_eq!(
+        *current_capture.authorization.lock().unwrap(),
+        Some("Bearer current-key".to_string())
+    );
+    assert!(mapped_capture.body.lock().unwrap().is_empty());
+
+    route_task.abort();
+    current_task.abort();
+    mapped_task.abort();
+}
+
+#[tokio::test]
+async fn archived_session_falls_back_to_current_provider() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("archived-project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_archived_rollout(
+        home.path(),
+        "archived-session",
+        "thread-archived",
+        &workspace,
+    );
+
+    let current_capture = Capture::default();
+    let mapped_capture = Capture::default();
+    let current_upstream = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(current_capture.clone());
+    let mapped_upstream = Router::new()
+        .route("/v1/responses", post(capture_responses))
+        .with_state(mapped_capture.clone());
+    let (current_address, current_task) = spawn_router(current_upstream).await;
+    let (mapped_address, mapped_task) = spawn_router(mapped_upstream).await;
+
+    let directory = TempDir::new().unwrap();
+    let mut current = provider(
+        "current",
+        &format!("http://{current_address}/v1"),
+        Some("responses"),
+        Some("current-key"),
+    );
+    current.is_current = true;
+    let mapped = provider(
+        "mapped",
+        &format!("http://{mapped_address}/v1"),
+        Some("responses"),
+        Some("mapped-key"),
+    );
+    let (state, store) = dynamic_route_state(&directory, &[current, mapped], home.path());
+    store
+        .upsert_route_rule(&workspace, "mapped", false)
+        .unwrap();
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .header("session_id", "archived-session")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
     assert_eq!(
         *current_capture.authorization.lock().unwrap(),
         Some("Bearer current-key".to_string())

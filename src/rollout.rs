@@ -49,6 +49,20 @@ pub enum RolloutError {
 }
 
 pub fn discover_rollouts(codex_home: &Path) -> Result<Vec<PathBuf>, RolloutError> {
+    discover_rollouts_in(codex_home, true)
+}
+
+/// Discover only active session rollouts. This intentionally never opens the
+/// archived sessions directory so callers cannot accidentally treat archived
+/// sessions as live client state.
+pub fn discover_active_rollouts(codex_home: &Path) -> Result<Vec<PathBuf>, RolloutError> {
+    discover_rollouts_in(codex_home, false)
+}
+
+fn discover_rollouts_in(
+    codex_home: &Path,
+    include_archived: bool,
+) -> Result<Vec<PathBuf>, RolloutError> {
     if !codex_home.is_dir() {
         return Err(RolloutError::CodexHomeUnavailable {
             path: codex_home.to_path_buf(),
@@ -57,7 +71,12 @@ pub fn discover_rollouts(codex_home: &Path) -> Result<Vec<PathBuf>, RolloutError
     }
 
     let mut paths = Vec::new();
-    for directory in [ACTIVE_SESSIONS_DIR, ARCHIVED_SESSIONS_DIR] {
+    let directories = if include_archived {
+        vec![ACTIVE_SESSIONS_DIR, ARCHIVED_SESSIONS_DIR]
+    } else {
+        vec![ACTIVE_SESSIONS_DIR]
+    };
+    for directory in directories {
         let root = codex_home.join(directory);
         if !root.exists() {
             continue;

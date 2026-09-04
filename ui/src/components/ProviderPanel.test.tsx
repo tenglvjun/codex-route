@@ -122,7 +122,7 @@ describe("ProviderPanel", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
+    await user.click(screen.getByRole("button", { name: "Import providers from cc-switch" }));
 
     expect(onImportOpenChange).toHaveBeenCalledWith(true);
   });

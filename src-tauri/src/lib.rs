@@ -14,8 +14,17 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindow, Windo
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
+#[cfg(target_os = "macos")]
+fn hide_window_title<R: Runtime>(window: &WebviewWindow<R>) {
+    if let Err(error) = window.set_title("") {
+        log::warn!(target: "desktop", "failed to hide macOS window title: {error}");
+    }
+}
+
 fn get_or_create_main_window<R: Runtime>(app_handle: &AppHandle<R>) -> Option<WebviewWindow<R>> {
     if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+        #[cfg(target_os = "macos")]
+        hide_window_title(&window);
         return Some(window);
     }
 
@@ -30,7 +39,11 @@ fn get_or_create_main_window<R: Runtime>(app_handle: &AppHandle<R>) -> Option<We
     match tauri::WebviewWindowBuilder::from_config(app_handle, &config)
         .and_then(|builder| builder.build())
     {
-        Ok(window) => Some(window),
+        Ok(window) => {
+            #[cfg(target_os = "macos")]
+            hide_window_title(&window);
+            Some(window)
+        }
         Err(error) => {
             eprintln!("failed to recreate the main window: {error}");
             None
@@ -81,9 +94,7 @@ fn start_event_bridge<R: Runtime>(app_handle: AppHandle<R>, state: AppState) {
                         let _ = app_handle.emit("runtime-status-changed", payload);
                         if let Ok(snapshot) = commands::build_client_snapshot(&state).await {
                             if let Some(tray) = app_handle.tray_by_id("main") {
-                                if let Ok(menu) = tray::build_menu(&app_handle, &snapshot) {
-                                    let _ = tray.set_menu(Some(menu));
-                                }
+                                let _ = tray::update_menu(&app_handle, &snapshot);
                                 let _ = tray.set_tooltip(Some(format!(
                                     "Codex Route · {}",
                                     snapshot.runtime.phase.phase_label()
@@ -160,13 +171,15 @@ pub fn run() {
         .setup(|app| {
             let state = app.state::<AppState>().inner().clone();
             start_event_bridge(app.handle().clone(), state.clone());
-            coordinator::start(Arc::new(state), app.handle().clone());
+            if let Err(error) = tray::install(app.handle()) {
+                log::error!(target: "desktop", "failed to install tray: {error}");
+            }
+            coordinator::start(Arc::new(state.clone()), app.handle().clone());
             let handle = app.handle().clone();
-            let state = app.state::<AppState>().inner().clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(snapshot) = commands::build_client_snapshot(&state).await {
-                    if let Err(error) = tray::install(&handle, &snapshot) {
-                        log::warn!(target: "desktop", "failed to install tray: {error}");
+                    if let Err(error) = tray::update_menu(&handle, &snapshot) {
+                        log::warn!(target: "desktop", "failed to update initial tray menu: {error}");
                     }
                 }
             });

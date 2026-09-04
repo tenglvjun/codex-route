@@ -43,8 +43,9 @@ describe("WorkspaceRulesPanel", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Workspace path"), "/tmp/project");
     await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.type(screen.getByLabelText("Workspace path"), "/tmp/project");
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith({
@@ -72,7 +73,7 @@ describe("WorkspaceRulesPanel", () => {
     await user.click(screen.getByRole("button", { name: `Edit route for ${rule.workspace}` }));
     expect(screen.getByLabelText("Workspace path")).toHaveProperty("readOnly", true);
     await user.selectOptions(screen.getByLabelText("Provider"), "provider-b");
-    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith({
@@ -140,13 +141,13 @@ describe("WorkspaceRulesPanel", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(screen.getByText("Workspace path is required.")).toBeTruthy();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it("closes when the optional close button is pressed", async () => {
-    const onClose = vi.fn();
+  it("collapses the form when cancelled", async () => {
     const user = userEvent.setup();
     render(
       <WorkspaceRulesPanel
@@ -156,13 +157,14 @@ describe("WorkspaceRulesPanel", () => {
         onSave={vi.fn()}
         onRemove={vi.fn()}
         onError={vi.fn()}
-        onClose={onClose}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Close workspace rules" }));
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(screen.getByLabelText("Workspace path")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText("Workspace path")).toBeNull();
   });
 
   it("keeps the form populated when the backend rejects a rule", async () => {
@@ -179,8 +181,9 @@ describe("WorkspaceRulesPanel", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Workspace path"), "relative/project");
     await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.type(screen.getByLabelText("Workspace path"), "relative/project");
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     const error = await screen.findByRole("alert");
     expect(error.textContent).toContain("workspace path must be absolute");

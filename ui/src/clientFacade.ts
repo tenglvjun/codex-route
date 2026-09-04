@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { desktopApi, type ClientSnapshot, type DiagnosticRecord, type RuntimeSnapshot, type WorkspaceSnapshot } from "./api";
+import { desktopApi, type ClientSnapshot, type DiagnosticRecord, type RuntimeSnapshot } from "./api";
 
 type RuntimeEvent = {
   sequence: number;
@@ -10,7 +10,6 @@ type SnapshotEvent = ClientSnapshot;
 type SnapshotListener = (snapshot: ClientSnapshot) => void;
 type DiagnosticListener = (record: DiagnosticRecord) => void;
 type DiagnosticEvent = { sequence: number; generatedAt: number; record: DiagnosticRecord };
-type WorkspaceEvent = { sequence: number; generatedAt: number; workspace?: WorkspaceSnapshot };
 
 let currentSnapshot: ClientSnapshot | null = null;
 let latestSequence = 0;
@@ -92,18 +91,6 @@ async function installEventBridge(generation: number): Promise<void> {
           unreadCount: currentSnapshot.diagnostics.unreadCount + 1,
           lastError: record.severity === "error" ? record.message : currentSnapshot.diagnostics.lastError,
         },
-      };
-      currentSnapshot = snapshot;
-      subscribers.forEach((subscriber) => subscriber(snapshot));
-    }));
-    unlisteners.push(await listen<WorkspaceEvent>("workspace-changed", (event) => {
-      if (!currentSnapshot || event.payload.sequence < latestSequence) return;
-      latestSequence = event.payload.sequence;
-      const snapshot = {
-        ...currentSnapshot,
-        sequence: event.payload.sequence,
-        generatedAt: event.payload.generatedAt,
-        workspace: event.payload.workspace,
       };
       currentSnapshot = snapshot;
       subscribers.forEach((subscriber) => subscriber(snapshot));

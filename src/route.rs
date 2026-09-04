@@ -265,7 +265,7 @@ impl RouteState {
     ) -> Option<PathBuf> {
         let session_id = extract_codex_session_id(headers, body?)?;
         let config = self.scan_config.as_ref()?;
-        let index = SessionWorkspaceIndex::build(config).ok()?;
+        let index = SessionWorkspaceIndex::build_active(config).ok()?;
         let lookup = index.resolve(&session_id).ok()?;
         if lookup.conflicting_workspaces || !lookup.workspace_exists {
             return None;

@@ -1,14 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::config::ScanConfig;
 use crate::rollout::{
-    discover_rollouts, is_archived_path, read_session_meta, RolloutError, RolloutSessionMeta,
+    discover_active_rollouts, discover_rollouts, is_archived_path, read_session_meta, RolloutError,
+    RolloutSessionMeta,
 };
 use crate::workspace_rule::normalize_workspace_path;
 
@@ -21,6 +22,17 @@ pub struct WorkspaceLookup {
     pub thread_ids: Vec<String>,
     pub rollout_paths: Vec<PathBuf>,
     pub conflicting_workspaces: bool,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct WorkspaceAggregate {
+    pub workspace: PathBuf,
+    pub workspace_exists: bool,
+    pub session_ids: Vec<String>,
+    pub thread_ids: Vec<String>,
+    pub rollout_paths: Vec<PathBuf>,
+    pub last_activity: Option<i64>,
+    pub conflicting_sessions: bool,
 }
 
 #[derive(Debug, Error)]
@@ -59,6 +71,23 @@ impl SessionWorkspaceIndex {
             }
         }
 
+        Ok(Self { sessions })
+    }
+
+    /// Returns an index built only from active Codex sessions.
+    pub fn build_active(config: &ScanConfig) -> Result<Self, IndexError> {
+        let paths = discover_active_rollouts(&config.codex_home)?;
+        let mut sessions = BTreeMap::<String, Vec<RolloutSessionMeta>>::new();
+        for path in paths {
+            match read_session_meta(&path, false, config.max_rollout_bytes) {
+                Ok(Some(meta)) => sessions
+                    .entry(meta.session_id.clone())
+                    .or_default()
+                    .push(meta),
+                Ok(None) | Err(RolloutError::ScanLimitExceeded { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(Self { sessions })
     }
 
@@ -111,6 +140,47 @@ impl SessionWorkspaceIndex {
         })
     }
 
+    /// Returns one row per unique workspace, ordered by the most recent
+    /// active session activity. Archived records are ignored by construction
+    /// when called on an index from `build_active`.
+    pub fn workspaces(&self) -> Vec<WorkspaceAggregate> {
+        let mut grouped = BTreeMap::<PathBuf, WorkspaceAggregateBuilder>::new();
+        let mut session_workspaces = BTreeMap::<String, BTreeSet<PathBuf>>::new();
+
+        for record in self
+            .sessions
+            .values()
+            .flatten()
+            .filter(|record| !record.archived)
+        {
+            let workspace = normalize_workspace(&record.workspace);
+            session_workspaces
+                .entry(record.session_id.clone())
+                .or_default()
+                .insert(workspace.clone());
+
+            grouped
+                .entry(workspace.clone())
+                .or_default()
+                .add(record, workspace);
+        }
+
+        let ambiguous_sessions = session_workspaces
+            .into_iter()
+            .filter_map(|(session_id, workspaces)| (workspaces.len() > 1).then_some(session_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut workspaces = grouped
+            .into_values()
+            .map(|builder| builder.finish(&ambiguous_sessions))
+            .collect::<Vec<_>>();
+        workspaces.sort_by(|left, right| {
+            compare_activity_desc(left.last_activity, right.last_activity)
+                .then_with(|| left.workspace.cmp(&right.workspace))
+        });
+        workspaces
+    }
+
     /// Returns the workspace for the most recently modified active session.
     /// Archived sessions are considered only when no active session exists.
     pub fn latest_workspace(&self) -> Option<WorkspaceLookup> {
@@ -128,6 +198,60 @@ impl SessionWorkspaceIndex {
         })?;
         self.resolve(&latest.session_id).ok()
     }
+}
+
+#[derive(Default)]
+struct WorkspaceAggregateBuilder {
+    workspace: Option<PathBuf>,
+    session_ids: BTreeSet<String>,
+    thread_ids: BTreeSet<String>,
+    rollout_paths: BTreeSet<PathBuf>,
+    latest_record: Option<RolloutSessionMeta>,
+}
+
+impl WorkspaceAggregateBuilder {
+    fn add(&mut self, record: &RolloutSessionMeta, workspace: PathBuf) {
+        self.workspace = Some(workspace);
+        self.session_ids.insert(record.session_id.clone());
+        self.thread_ids.insert(record.thread_id.clone());
+        self.rollout_paths.insert(record.rollout_path.clone());
+
+        if self
+            .latest_record
+            .as_ref()
+            .is_none_or(|current| compare_recency(record, current) == Ordering::Greater)
+        {
+            self.latest_record = Some(record.clone());
+        }
+    }
+
+    fn finish(self, ambiguous_sessions: &BTreeSet<String>) -> WorkspaceAggregate {
+        let workspace = self.workspace.unwrap_or_default();
+        let last_activity = self
+            .latest_record
+            .as_ref()
+            .and_then(|record| record.modified_at)
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs() as i64);
+        let conflicting_sessions = self
+            .session_ids
+            .iter()
+            .any(|session_id| ambiguous_sessions.contains(session_id));
+
+        WorkspaceAggregate {
+            workspace_exists: workspace.exists(),
+            workspace,
+            session_ids: self.session_ids.into_iter().collect(),
+            thread_ids: self.thread_ids.into_iter().collect(),
+            rollout_paths: self.rollout_paths.into_iter().collect(),
+            last_activity,
+            conflicting_sessions,
+        }
+    }
+}
+
+fn compare_activity_desc(left: Option<i64>, right: Option<i64>) -> Ordering {
+    right.cmp(&left)
 }
 
 fn compare_recency(left: &RolloutSessionMeta, right: &RolloutSessionMeta) -> Ordering {
@@ -293,5 +417,65 @@ mod tests {
             index.session_ids(),
             vec!["session-a".to_string(), "session-b".to_string()]
         );
+    }
+
+    #[test]
+    fn aggregates_active_workspaces_by_recency_and_path() {
+        let recent_workspace = fixture_path("recent");
+        let older_workspace = fixture_path("older");
+        let archived_workspace = fixture_path("archived-only");
+        let mut archived = record(
+            "ARCHIVED",
+            "TA",
+            &archived_workspace,
+            "2026-01-03T00:00:00Z",
+        );
+        archived.archived = true;
+        archived.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(300));
+        let mut recent_a = record("RECENT", "T1", &recent_workspace, "2026-01-01T00:00:00Z");
+        recent_a.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(200));
+        let mut recent_b = record("RECENT", "T2", &recent_workspace, "2026-01-02T00:00:00Z");
+        recent_b.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(250));
+        let mut older = record("OLDER", "TO", &older_workspace, "2026-01-01T00:00:00Z");
+        older.modified_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(100));
+
+        let index = SessionWorkspaceIndex {
+            sessions: BTreeMap::from([
+                ("ARCHIVED".to_string(), vec![archived]),
+                ("RECENT".to_string(), vec![recent_a, recent_b]),
+                ("OLDER".to_string(), vec![older]),
+            ]),
+        };
+
+        let workspaces = index.workspaces();
+        assert_eq!(workspaces.len(), 2);
+        assert_eq!(workspaces[0].workspace, recent_workspace);
+        assert_eq!(workspaces[0].session_ids, vec!["RECENT".to_string()]);
+        assert_eq!(
+            workspaces[0].thread_ids,
+            vec!["T1".to_string(), "T2".to_string()]
+        );
+        assert_eq!(workspaces[0].last_activity, Some(250));
+        assert_eq!(workspaces[1].workspace, older_workspace);
+    }
+
+    #[test]
+    fn marks_workspace_when_a_session_has_conflicting_active_workspaces() {
+        let left = fixture_path("left");
+        let right = fixture_path("right");
+        let index = SessionWorkspaceIndex {
+            sessions: BTreeMap::from([(
+                "S".to_string(),
+                vec![
+                    record("S", "T1", &left, "2026-01-01T00:00:00Z"),
+                    record("S", "T2", &right, "2026-01-02T00:00:00Z"),
+                ],
+            )]),
+        };
+
+        assert!(index
+            .workspaces()
+            .iter()
+            .all(|workspace| workspace.conflicting_sessions));
     }
 }

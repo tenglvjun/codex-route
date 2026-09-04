@@ -1,20 +1,64 @@
-import { FolderOpen } from "lucide-react";
-import type { WorkspaceSnapshot } from "../api";
+import { FolderOpen, GitBranch } from "lucide-react";
+import type { ProviderSummary, WorkspaceSnapshot } from "../api";
 
-export function WorkspaceSummary({ workspace }: { workspace?: WorkspaceSnapshot }) {
-  const activity = workspace?.lastActivity
-    ? new Date(workspace.lastActivity * 1000).toLocaleString()
-    : "No recorded activity";
-  return (
-    <div className="dashboard-card dashboard-card-workspace">
-      <div className="dashboard-card-icon" aria-hidden="true"><FolderOpen size={18} /></div>
-      <div>
-        <p className="eyebrow">WORKSPACE</p>
-        <strong>{workspace?.path || "Waiting for a session"}</strong>
-        <span>{workspace?.sessionId ? `Session ${workspace.sessionId}` : "Session discovery is active"}</span>
-        <span>{workspace ? (workspace.exists ? "Folder available" : "Folder is no longer available") : activity}</span>
-        {workspace && <span>Last activity: {activity}</span>}
+type WorkspaceSummaryProps = {
+  workspaces: WorkspaceSnapshot[];
+  providers: ProviderSummary[];
+  defaultProvider?: ProviderSummary;
+  onProviderChange?: (workspace: string, providerId: string) => void;
+};
+
+export function WorkspaceSummary({
+  workspaces,
+  providers,
+  defaultProvider,
+  onProviderChange,
+}: WorkspaceSummaryProps) {
+  if (workspaces.length === 0) {
+    return (
+      <div className="workspace-route-empty" role="status">
+        <FolderOpen size={22} aria-hidden="true" />
+        <div>
+          <strong>No active Codex workspaces</strong>
+          <span>New sessions will use {defaultProvider ? `${defaultProvider.name} by default` : "the default route"}.</span>
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="workspace-route-list" aria-label="Workspace routes">
+      {workspaces.map((workspace) => {
+        const selectedProviderId = workspace.providerId || "";
+        return (
+          <div className="workspace-route-row" key={workspace.path}>
+            <div className="workspace-route-icon" aria-hidden="true">
+              {workspace.conflictingWorkspaces ? <GitBranch size={18} /> : <FolderOpen size={18} />}
+            </div>
+            <div className="workspace-route-copy">
+              <strong>{workspace.path}</strong>
+              <span>
+                {workspace.sessionIds.length} session{workspace.sessionIds.length === 1 ? "" : "s"} · {workspace.threadIds.length} thread{workspace.threadIds.length === 1 ? "" : "s"}
+                {!workspace.exists ? " · folder unavailable" : ""}
+                {workspace.conflictingWorkspaces ? " · ambiguous session metadata" : ""}
+              </span>
+            </div>
+            <label className="workspace-route-select">
+              <span className="sr-only">Route for {workspace.path}</span>
+              <select
+                value={selectedProviderId}
+                onChange={(event) => onProviderChange?.(workspace.path, event.target.value)}
+                disabled={providers.length === 0 || !onProviderChange}
+              >
+                <option value="">Use default{defaultProvider ? ` · ${defaultProvider.name}` : " route"}</option>
+                {providers.map((provider) => (
+                  <option value={provider.id} key={provider.id}>{provider.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        );
+      })}
     </div>
   );
 }

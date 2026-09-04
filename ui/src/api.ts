@@ -37,6 +37,7 @@ export type WorkspaceSnapshot = {
   path: string;
   exists: boolean;
   sessionId: string;
+  sessionIds: string[];
   threadIds: string[];
   providerId?: string;
   lastActivity?: number;
@@ -53,6 +54,7 @@ export type ClientSnapshot = {
   sequence: number;
   generatedAt: number;
   codex: CodexStatus;
+  workspaces: WorkspaceSnapshot[];
   workspace?: WorkspaceSnapshot;
   provider?: ProviderSummary;
   providers: ProviderSummary[];

@@ -2,7 +2,11 @@ use crate::client_snapshot::ClientSnapshot;
 use crate::diagnostics::DiagnosticSeverity;
 use crate::logging;
 use std::collections::BTreeMap;
+#[cfg(target_os = "macos")]
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItem};
+#[cfg(not(target_os = "macos"))]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
 pub const SHOW_WINDOW_ID: &str = "show-window";
@@ -21,6 +25,17 @@ pub struct TrayMenuModel {
 }
 
 impl TrayMenuModel {
+    pub fn empty() -> Self {
+        Self {
+            show_window: "Show Codex Route".to_string(),
+            route_status: "Route unavailable".to_string(),
+            route_enabled: false,
+            provider_status: "Provider: none".to_string(),
+            provider_enabled: false,
+            quit: "Quit Codex Route".to_string(),
+        }
+    }
+
     pub fn from_snapshot(snapshot: &ClientSnapshot) -> Self {
         let route_status = if snapshot.runtime.active {
             "Stop Route".to_string()
@@ -50,11 +65,19 @@ impl TrayMenuModel {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn macos_tray_icon() -> tauri::Result<Image<'static>> {
+    const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusbar_template_3x.png");
+    Image::from_bytes(ICON_BYTES)
+}
+
 pub fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
-    snapshot: &ClientSnapshot,
+    snapshot: Option<&ClientSnapshot>,
 ) -> tauri::Result<Menu<R>> {
-    let model = TrayMenuModel::from_snapshot(snapshot);
+    let model = snapshot
+        .map(TrayMenuModel::from_snapshot)
+        .unwrap_or_else(TrayMenuModel::empty);
     let show = MenuItem::with_id(app, SHOW_WINDOW_ID, model.show_window, true, None::<&str>)?;
     let route = MenuItem::with_id(
         app,
@@ -81,17 +104,21 @@ pub fn build_menu<R: Runtime>(
         .build()
 }
 
-pub fn install<R: Runtime>(app: &AppHandle<R>, snapshot: &ClientSnapshot) -> tauri::Result<()> {
-    let menu = build_menu(app, snapshot)?;
+pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let menu = build_menu(app, None)?;
+
+    #[cfg(target_os = "macos")]
+    let icon = macos_tray_icon()?;
+
+    #[cfg(not(target_os = "macos"))]
     let icon = app
         .default_window_icon()
         .cloned()
         .ok_or_else(|| tauri::Error::AssetNotFound("default application icon".into()))?;
-    tauri::tray::TrayIconBuilder::with_id("main")
+    let mut builder = tauri::tray::TrayIconBuilder::with_id("main")
         .icon(icon)
         .menu(&menu)
         .tooltip("Codex Route")
-        .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             SHOW_WINDOW_ID => super::present_main_window(app),
             ROUTE_ACTION_ID => {
@@ -135,9 +162,39 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, snapshot: &ClientSnapshot) -> tau
             }
             QUIT_ID => app.exit(0),
             _ => {}
-        })
-        .build(app)?;
+        });
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.icon_as_template(true).show_menu_on_left_click(true);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    super::present_main_window(tray.app_handle());
+                }
+            });
+    }
+
+    builder.build(app)?;
     Ok(())
+}
+
+pub fn update_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &ClientSnapshot) -> tauri::Result<()> {
+    let Some(tray) = app.tray_by_id("main") else {
+        return Err(tauri::Error::AssetNotFound("main tray icon".into()));
+    };
+    let menu = build_menu(app, Some(snapshot))?;
+    tray.set_menu(Some(menu))
 }
 
 #[cfg(test)]
@@ -166,6 +223,7 @@ mod tests {
                 config_managed: false,
                 external_modification: false,
             },
+            workspaces: Vec::new(),
             workspace: None,
             provider: providers.first().cloned(),
             providers,
@@ -193,6 +251,15 @@ mod tests {
         assert_eq!(model.route_status, "Stop Route");
         assert_eq!(model.provider_status, "Provider: Provider A");
         assert!(model.route_enabled);
+    }
+
+    #[test]
+    fn empty_menu_has_safe_disabled_actions() {
+        let model = TrayMenuModel::empty();
+        assert_eq!(model.route_status, "Route unavailable");
+        assert_eq!(model.provider_status, "Provider: none");
+        assert!(!model.route_enabled);
+        assert!(!model.provider_enabled);
     }
 
     #[test]

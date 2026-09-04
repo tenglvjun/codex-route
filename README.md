@@ -140,11 +140,13 @@ The route injects the credential from the local provider database and binds to
 loopback only. `/v1/models` returns an empty Codex-compatible model catalog
 until model-catalog projection is implemented. `/v1/responses/compact` is a
 transparent upstream passthrough. When `--provider` is omitted, the route
-selects a provider using the request's Codex session and workspace route rules.
-The route scans a bounded rollout prefix per request so sessions created after
-startup can be resolved without restarting the server. This milestone forwards
-only the native Responses protocol; it does not translate Chat Completions or
-Anthropic requests, write Codex live files, or perform retries/failover.
+selects a provider using the request's active Codex session and workspace route
+rules. A known workspace rule wins; requests without a usable active
+session/workspace fall back to the current provider. The route scans a bounded
+rollout prefix per request so sessions created after startup can be resolved
+without restarting the server. This milestone forwards only the native
+Responses protocol; it does not translate Chat Completions or Anthropic
+requests, write Codex live files, or perform retries/failover.
 
 Manage workspace route rules from the CLI:
 
@@ -180,11 +182,15 @@ folder. Structured diagnostics are also available from the Workspace overview.
 ## Selection Rules
 
 - Multiple threads with the same `session_id` are treated as one project.
+- Desktop Overview scans only `$CODEX_HOME/sessions`; archived sessions never
+  appear in the workspace route table or select a workspace provider.
+- Overview groups active sessions by normalized workspace path, removes
+  duplicates, and sorts workspaces by most recent rollout activity.
 - If all matching records have the same normalized workspace, that path is returned.
 - If records contain multiple workspaces, the oldest valid `session_meta` workspace is selected as `workspace` and all candidates are listed in `workspaces`.
 - Existing paths are canonicalized; missing paths are returned as normalized absolute paths with `workspace_exists: false`.
 - Malformed rollout lines are ignored. Prompt and conversation records are never read after the first usable `session_meta`.
-- Route provider precedence is `--provider` > exact workspace rule > current provider.
+- Route provider precedence is `--provider` > exact active-workspace rule > current provider (the default route configured in Settings).
 - Requests without a usable session, unknown sessions, conflicting workspace metadata, missing workspaces, or unreadable rollout indexes fall back to the current provider.
 
 ## Scope Boundary

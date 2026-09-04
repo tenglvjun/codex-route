@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ClientSnapshot } from "../api";
 import { DashboardPage } from "./DashboardPage";
@@ -16,14 +16,16 @@ const snapshot: ClientSnapshot = {
     configManaged: true,
     externalModification: false,
   },
-  workspace: {
+  workspaces: [{
     path: "/tmp/project",
     exists: true,
     sessionId: "session-1",
+    sessionIds: ["session-1"],
     threadIds: ["thread-1"],
     providerId: "provider-a",
     conflictingWorkspaces: false,
-  },
+  }],
+  workspace: undefined,
   provider: { id: "provider-a", name: "Provider A", source: "local", isCurrent: true },
   providers: [
     { id: "provider-a", name: "Provider A", source: "local", isCurrent: true },
@@ -45,11 +47,36 @@ const snapshot: ClientSnapshot = {
 };
 
 describe("DashboardPage", () => {
-  it("shows the current workspace, provider and runtime together", () => {
+  it("shows every workspace route and runtime together", () => {
     render(<DashboardPage snapshot={snapshot} onProviderChange={vi.fn()} onStopRuntime={vi.fn()} />);
-    expect(screen.getByRole("heading", { name: "/tmp/project" })).toBeTruthy();
-    expect((screen.getByLabelText("Active for this workspace") as HTMLSelectElement).value).toBe("provider-a");
-    expect(screen.getByRole("status").textContent).toContain("running");
-    expect(screen.getByText("Listening on 127.0.0.1:16729")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workspace routes" })).toBeTruthy();
+    expect((screen.getByLabelText("Route for /tmp/project") as HTMLSelectElement).value).toBe("provider-a");
+    expect(screen.getByText("Ready")).toBeTruthy();
+    expect(screen.getByText("127.0.0.1:16729")).toBeTruthy();
+  });
+
+  it("exposes a default fallback for unconfigured workspaces", () => {
+    const onProviderChange = vi.fn();
+    const multiWorkspaceSnapshot = {
+      ...snapshot,
+      workspaces: [
+        ...snapshot.workspaces,
+        {
+          path: "/tmp/other-project",
+          exists: true,
+          sessionId: "session-2",
+          sessionIds: ["session-2"],
+          threadIds: ["thread-2"],
+          conflictingWorkspaces: false,
+        },
+      ],
+    };
+    render(<DashboardPage snapshot={multiWorkspaceSnapshot} onProviderChange={onProviderChange} />);
+
+    const route = screen.getByLabelText("Route for /tmp/other-project") as HTMLSelectElement;
+    expect(route.value).toBe("");
+    expect(route.options[0].textContent).toContain("Provider A");
+    fireEvent.change(route, { target: { value: "provider-b" } });
+    expect(onProviderChange).toHaveBeenCalledWith("/tmp/other-project", "provider-b");
   });
 });

@@ -338,8 +338,8 @@ function App() {
                   busy={busy}
                   loading={loading}
                   onSelect={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
+                  onScan={desktopApi.scanCcSwitchProviders}
                   onImport={importProviders}
-                  onError={setError}
                   importOpen={importOpen}
                   onImportOpenChange={setImportOpen}
                 />

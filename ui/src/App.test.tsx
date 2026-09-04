@@ -3,13 +3,8 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { open } from "@tauri-apps/plugin-dialog";
 import { desktopApi, type LifecycleStatus, type ProviderSummary } from "./api";
 import App from "./App";
-
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(),
-}));
 
 vi.mock("./api", () => ({
   desktopApi: {
@@ -17,6 +12,7 @@ vi.mock("./api", () => ({
     listRouteRules: vi.fn(),
     getLifecycleStatus: vi.fn(),
     setCurrentProvider: vi.fn(),
+    scanCcSwitchProviders: vi.fn(),
     importCcSwitchProviders: vi.fn(),
     upsertRouteRule: vi.fn(),
     removeRouteRule: vi.fn(),
@@ -81,11 +77,18 @@ describe("App", () => {
     expect(desktopApi.activateRoute).not.toHaveBeenCalled();
   });
 
-  it("imports providers and refreshes the provider list", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/cc-switch.db");
+  it("scans automatically and imports the selected providers", async () => {
     vi.mocked(desktopApi.listProviders)
       .mockResolvedValueOnce([])
       .mockResolvedValue([provider]);
+    vi.mocked(desktopApi.scanCcSwitchProviders).mockResolvedValue({
+      source: "/tmp/cc-switch.db",
+      providers: [
+        { id: "provider-a", name: "Provider A", category: "Official", alreadyImported: false },
+        { id: "provider-b", name: "Provider B", alreadyImported: true },
+      ],
+      rejected: [],
+    });
     vi.mocked(desktopApi.importCcSwitchProviders).mockResolvedValue({
       source: "/tmp/cc-switch.db",
       imported: 1,
@@ -99,11 +102,14 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "Default fallback provider" });
 
     await user.click(screen.getByRole("button", { name: "Import providers" }));
-    await user.click(screen.getByRole("button", { name: "Choose database" }));
+    expect(await screen.findByRole("dialog", { name: "Import from cc-switch" })).toBeTruthy();
+    expect(desktopApi.scanCcSwitchProviders).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("checkbox", { name: /Provider B/ }));
+    await user.click(screen.getByRole("button", { name: "Import selected (1)" }));
 
     await waitFor(() =>
       expect(desktopApi.importCcSwitchProviders).toHaveBeenCalledWith({
-        databasePath: "/tmp/cc-switch.db",
+        providerIds: ["provider-a"],
         conflictPolicy: "skip",
       }),
     );

@@ -1,9 +1,11 @@
 use crate::state::AppState;
-use codex_route::cc_switch_import::{CcSwitchImporter, ConflictPolicy, ImportReport};
+use codex_route::cc_switch_import::{
+    CcSwitchImporter, ConflictPolicy, ImportReport, RejectedProvider,
+};
 use codex_route::lifecycle::{ActivationResult, DeactivationResult, LifecycleStatus};
 use codex_route::provider::ProviderSummary;
 use codex_route::workspace_rule::WorkspaceRouteRule;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
@@ -27,8 +29,25 @@ pub struct UpsertRouteRuleRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportCcSwitchRequest {
-    pub database_path: PathBuf,
+    pub provider_ids: Vec<String>,
     pub conflict_policy: ConflictPolicy,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcSwitchProviderCandidate {
+    pub id: String,
+    pub name: String,
+    pub category: Option<String>,
+    pub already_imported: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcSwitchScanReport {
+    pub source: PathBuf,
+    pub providers: Vec<CcSwitchProviderCandidate>,
+    pub rejected: Vec<RejectedProvider>,
 }
 
 #[tauri::command]
@@ -65,21 +84,71 @@ pub async fn set_current_provider(
 }
 
 #[tauri::command]
+pub async fn scan_cc_switch_providers(
+    state: State<'_, AppState>,
+) -> Result<CcSwitchScanReport, String> {
+    let store = Arc::clone(&state.store);
+    tauri::async_runtime::spawn_blocking(move || {
+        let scan = CcSwitchImporter::new(CcSwitchImporter::discover_default_db())
+            .read_codex_providers()
+            .map_err(|error| error.to_string())?;
+        let providers = scan
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let source_id = candidate
+                    .provider
+                    .source
+                    .source_id()
+                    .expect("cc-switch candidates always have a source ID");
+                let already_imported = store
+                    .find_imported(source_id)
+                    .map_err(|error| error.to_string())?
+                    .is_some();
+                Ok(CcSwitchProviderCandidate {
+                    id: source_id.to_string(),
+                    name: candidate.provider.name.clone(),
+                    category: candidate.provider.category.clone(),
+                    already_imported,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(CcSwitchScanReport {
+            source: scan.source,
+            providers,
+            rejected: scan.rejected,
+        })
+    })
+    .await
+    .map_err(|error| format!("provider scan command failed: {error}"))?
+}
+
+#[tauri::command]
 pub async fn import_cc_switch_providers(
     state: State<'_, AppState>,
     request: ImportCcSwitchRequest,
 ) -> Result<ImportReport, String> {
-    if request.database_path.as_os_str().is_empty() {
-        return Err("databasePath must not be empty".to_string());
+    let provider_ids: Vec<String> = request
+        .provider_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if provider_ids.is_empty() {
+        return Err("providerIds must contain at least one provider".to_string());
     }
 
     let store = Arc::clone(&state.store);
     tauri::async_runtime::spawn_blocking(move || {
-        let scan = CcSwitchImporter::new(request.database_path)
+        let scan = CcSwitchImporter::new(CcSwitchImporter::discover_default_db())
             .read_codex_providers()
             .map_err(|error| error.to_string())?;
+        let selected = scan
+            .select_provider_ids(&provider_ids)
+            .map_err(|error| error.to_string())?;
         store
-            .import_scan_transaction(&scan, request.conflict_policy)
+            .import_scan_transaction(&selected, request.conflict_policy)
             .map_err(|error| error.to_string())
     })
     .await

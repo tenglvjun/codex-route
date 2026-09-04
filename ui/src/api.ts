@@ -47,7 +47,7 @@ export type ActivationResult = {
 export type ConflictPolicy = "skip" | "replace" | "rename";
 
 export type ImportCcSwitchRequest = {
-  databasePath: string;
+  providerIds: string[];
   conflictPolicy: ConflictPolicy;
 };
 
@@ -65,10 +65,24 @@ export type ImportReport = {
   rejected: RejectedProvider[];
 };
 
+export type CcSwitchProviderCandidate = {
+  id: string;
+  name: string;
+  category?: string;
+  alreadyImported: boolean;
+};
+
+export type CcSwitchScanReport = {
+  source: string;
+  providers: CcSwitchProviderCandidate[];
+  rejected: RejectedProvider[];
+};
+
 export const desktopApi = {
   listProviders: () => invoke<ProviderSummary[]>("list_providers"),
   setCurrentProvider: (providerId: string) =>
     invoke<ProviderSummary>("set_current_provider", { providerId }),
+  scanCcSwitchProviders: () => invoke<CcSwitchScanReport>("scan_cc_switch_providers"),
   importCcSwitchProviders: (request: ImportCcSwitchRequest) =>
     invoke<ImportReport>("import_cc_switch_providers", { request }),
   getLifecycleStatus: () => invoke<LifecycleStatus>("get_lifecycle_status"),

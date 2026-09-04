@@ -75,7 +75,11 @@ impl ClientSnapshot {
         let effective_provider = workspace
             .as_ref()
             .and_then(|workspace| workspace.provider_id.as_deref())
-            .and_then(|provider_id| provider_records.iter().find(|provider| provider.id == provider_id))
+            .and_then(|provider_id| {
+                provider_records
+                    .iter()
+                    .find(|provider| provider.id == provider_id)
+            })
             .or(current_provider)
             .map(ProviderSummary::from);
         let codex = detect_codex(scan_config, &runtime);
@@ -109,7 +113,12 @@ fn latest_workspace(
     let provider_id = rules
         .iter()
         .find(|rule| rule.workspace == lookup.workspace)
-        .and_then(|rule| providers.iter().any(|provider| provider.id == rule.provider_id).then(|| rule.provider_id.clone()));
+        .and_then(|rule| {
+            providers
+                .iter()
+                .any(|provider| provider.id == rule.provider_id)
+                .then(|| rule.provider_id.clone())
+        });
     let last_activity = lookup
         .rollout_paths
         .iter()

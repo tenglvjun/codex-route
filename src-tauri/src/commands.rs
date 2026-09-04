@@ -1,7 +1,7 @@
-use crate::state::AppState;
 use crate::client_snapshot::{ClientSnapshot, DiagnosticsSummary};
 use crate::diagnostics::DiagnosticSeverity;
 use crate::logging;
+use crate::state::AppState;
 use crate::state::ClientSettings;
 use codex_route::cc_switch_import::{
     CcSwitchImporter, ConflictPolicy, ImportReport, RejectedProvider,
@@ -10,9 +10,9 @@ use codex_route::lifecycle::{ActivationResult, DeactivationResult, LifecycleStat
 use codex_route::provider::ProviderSummary;
 use codex_route::workspace_rule::WorkspaceRouteRule;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::collections::BTreeMap;
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Debug, Deserialize, Default)]
@@ -99,9 +99,7 @@ pub async fn get_client_snapshot(state: State<'_, AppState>) -> Result<ClientSna
 }
 
 #[tauri::command]
-pub async fn get_client_settings(
-    state: State<'_, AppState>,
-) -> Result<ClientSettings, String> {
+pub async fn get_client_settings(state: State<'_, AppState>) -> Result<ClientSettings, String> {
     Ok(state.settings.read().await.clone())
 }
 
@@ -220,40 +218,41 @@ pub async fn scan_cc_switch_providers(
     state: State<'_, AppState>,
 ) -> Result<CcSwitchScanReport, String> {
     let store = Arc::clone(&state.store);
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<CcSwitchScanReport, String> {
-        let scan = CcSwitchImporter::new(CcSwitchImporter::discover_default_db())
-            .read_codex_providers()
-            .map_err(|error| error.to_string())?;
-        let providers = scan
-            .candidates
-            .iter()
-            .map(|candidate| {
-                let source_id = candidate
-                    .provider
-                    .source
-                    .source_id()
-                    .expect("cc-switch candidates always have a source ID");
-                let already_imported = store
-                    .find_imported(source_id)
-                    .map_err(|error| error.to_string())?
-                    .is_some();
-                Ok(CcSwitchProviderCandidate {
-                    id: source_id.to_string(),
-                    name: candidate.provider.name.clone(),
-                    category: candidate.provider.category.clone(),
-                    already_imported,
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<CcSwitchScanReport, String> {
+            let scan = CcSwitchImporter::new(CcSwitchImporter::discover_default_db())
+                .read_codex_providers()
+                .map_err(|error| error.to_string())?;
+            let providers = scan
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    let source_id = candidate
+                        .provider
+                        .source
+                        .source_id()
+                        .expect("cc-switch candidates always have a source ID");
+                    let already_imported = store
+                        .find_imported(source_id)
+                        .map_err(|error| error.to_string())?
+                        .is_some();
+                    Ok(CcSwitchProviderCandidate {
+                        id: source_id.to_string(),
+                        name: candidate.provider.name.clone(),
+                        category: candidate.provider.category.clone(),
+                        already_imported,
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+                .collect::<Result<Vec<_>, String>>()?;
 
-        Ok(CcSwitchScanReport {
-            source: scan.source,
-            providers,
-            rejected: scan.rejected,
+            Ok(CcSwitchScanReport {
+                source: scan.source,
+                providers,
+                rejected: scan.rejected,
+            })
         })
-    })
-    .await
-    .map_err(|error| format!("provider scan command failed: {error}"))?;
+        .await
+        .map_err(|error| format!("provider scan command failed: {error}"))?;
     match result {
         Ok(report) => Ok(report),
         Err(error) => {

@@ -148,7 +148,11 @@ mod tests {
     use codex_route::provider::ProviderSummary;
     use std::path::PathBuf;
 
-    fn snapshot(phase: RuntimePhase, active: bool, providers: Vec<ProviderSummary>) -> ClientSnapshot {
+    fn snapshot(
+        phase: RuntimePhase,
+        active: bool,
+        providers: Vec<ProviderSummary>,
+    ) -> ClientSnapshot {
         ClientSnapshot {
             schema_version: 1,
             sequence: 0,
@@ -166,7 +170,11 @@ mod tests {
             provider: providers.first().cloned(),
             providers,
             rules: Vec::new(),
-            runtime: RuntimeSnapshot { phase, active, ..RuntimeSnapshot::default() },
+            runtime: RuntimeSnapshot {
+                phase,
+                active,
+                ..RuntimeSnapshot::default()
+            },
             diagnostics: DiagnosticsSummary::default(),
         }
     }
@@ -180,7 +188,8 @@ mod tests {
             source: "local".into(),
             is_current: true,
         };
-        let model = TrayMenuModel::from_snapshot(&snapshot(RuntimePhase::Running, true, vec![provider]));
+        let model =
+            TrayMenuModel::from_snapshot(&snapshot(RuntimePhase::Running, true, vec![provider]));
         assert_eq!(model.route_status, "Stop Route");
         assert_eq!(model.provider_status, "Provider: Provider A");
         assert!(model.route_enabled);

@@ -27,9 +27,15 @@ pub async fn record(
             .await
     };
     match severity {
-        DiagnosticSeverity::Info => log::info!(target: "codex-route", "[{code}] {}", record.message),
-        DiagnosticSeverity::Warning => log::warn!(target: "codex-route", "[{code}] {}", record.message),
-        DiagnosticSeverity::Error => log::error!(target: "codex-route", "[{code}] {}", record.message),
+        DiagnosticSeverity::Info => {
+            log::info!(target: "codex-route", "[{code}] {}", record.message)
+        }
+        DiagnosticSeverity::Warning => {
+            log::warn!(target: "codex-route", "[{code}] {}", record.message)
+        }
+        DiagnosticSeverity::Error => {
+            log::error!(target: "codex-route", "[{code}] {}", record.message)
+        }
     }
     record
 }

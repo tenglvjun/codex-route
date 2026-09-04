@@ -1,5 +1,5 @@
-mod commands;
 mod client_snapshot;
+mod commands;
 mod coordinator;
 mod diagnostics;
 mod logging;

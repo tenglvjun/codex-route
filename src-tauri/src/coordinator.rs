@@ -1,7 +1,7 @@
-use crate::state::{AppState, ClientSettings};
 use crate::client_snapshot::ClientSnapshot;
 use crate::diagnostics::DiagnosticSeverity;
 use crate::logging;
+use crate::state::{AppState, ClientSettings};
 use codex_route::cc_switch_import::{CcSwitchImporter, ImportScan};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -46,7 +46,10 @@ impl<R: Runtime> ClientCoordinator<R> {
                     &self.state,
                     DiagnosticSeverity::Info,
                     "provider.cc_switch_scan_ready",
-                    format!("Discovered {} importable cc-switch providers", candidates.len()),
+                    format!(
+                        "Discovered {} importable cc-switch providers",
+                        candidates.len()
+                    ),
                     "coordinator",
                     BTreeMap::new(),
                     &[],
@@ -71,11 +74,12 @@ impl<R: Runtime> ClientCoordinator<R> {
         let settings = self.state.settings.read().await.clone();
         if should_auto_start(&settings) {
             if let Err(error) = self.state.runtime.ensure_running(None, None).await {
-                let severity = if matches!(error, crate::runtime::RuntimeError::ExternalModification) {
-                    DiagnosticSeverity::Warning
-                } else {
-                    DiagnosticSeverity::Error
-                };
+                let severity =
+                    if matches!(error, crate::runtime::RuntimeError::ExternalModification) {
+                        DiagnosticSeverity::Warning
+                    } else {
+                        DiagnosticSeverity::Error
+                    };
                 logging::record(
                     &self.state,
                     severity,

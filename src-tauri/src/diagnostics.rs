@@ -88,7 +88,8 @@ impl DiagnosticsStore {
     }
 
     pub async fn recent(&self, limit: usize) -> Vec<DiagnosticRecord> {
-        let mut records = self.records
+        let mut records = self
+            .records
             .lock()
             .await
             .iter()
@@ -183,7 +184,10 @@ mod tests {
                 "upstream",
                 "Authorization Bearer sk-secret",
                 "route",
-                BTreeMap::from([("url".to_string(), "https://example.test?key=sk-secret".to_string())]),
+                BTreeMap::from([(
+                    "url".to_string(),
+                    "https://example.test?key=sk-secret".to_string(),
+                )]),
                 &["sk-secret".to_string()],
             )
             .await;
@@ -224,6 +228,9 @@ mod tests {
         }
         let records = store.recent(500).await;
         assert_eq!(records.len(), 200);
-        assert_eq!(records.first().map(|record| record.message.as_str()), Some("204"));
+        assert_eq!(
+            records.first().map(|record| record.message.as_str()),
+            Some("204")
+        );
     }
 }

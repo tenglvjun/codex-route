@@ -160,7 +160,8 @@ impl RouteSupervisor {
         port: Option<u16>,
     ) -> Result<RuntimeSnapshot, RuntimeError> {
         self.desired_running.store(true, Ordering::SeqCst);
-        self.publish_phase(RuntimePhase::Starting, None, false).await;
+        self.publish_phase(RuntimePhase::Starting, None, false)
+            .await;
 
         let result = {
             let mut route = self.route.lock().await;
@@ -187,7 +188,8 @@ impl RouteSupervisor {
             Err(error) => {
                 self.desired_running.store(false, Ordering::SeqCst);
                 let phase = error_phase(&error);
-                self.publish_from_route(phase, Some(error.to_string())).await;
+                self.publish_from_route(phase, Some(error.to_string()))
+                    .await;
                 Err(error)
             }
         }
@@ -215,7 +217,8 @@ impl RouteSupervisor {
                 } else {
                     RuntimePhase::Degraded
                 };
-                self.publish_from_route(phase, Some(runtime_error.to_string())).await;
+                self.publish_from_route(phase, Some(runtime_error.to_string()))
+                    .await;
                 Err(runtime_error)
             }
         }
@@ -349,7 +352,11 @@ impl RouteSupervisor {
         tokio::time::sleep(restart_delay(next_count)).await;
         let result = {
             let mut route = self.route.lock().await;
-            route.activate().await.map(|_| ()).map_err(RuntimeError::from)
+            route
+                .activate()
+                .await
+                .map(|_| ())
+                .map_err(RuntimeError::from)
         };
         match result {
             Ok(()) => {
@@ -363,7 +370,8 @@ impl RouteSupervisor {
                 } else {
                     RuntimePhase::Degraded
                 };
-                self.publish_from_route(phase, Some(error.to_string())).await;
+                self.publish_from_route(phase, Some(error.to_string()))
+                    .await;
                 self.record_diagnostic(
                     crate::diagnostics::DiagnosticSeverity::Error,
                     "runtime.recovery_failed",

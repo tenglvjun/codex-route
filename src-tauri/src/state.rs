@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::runtime::RouteSupervisor;
 use crate::diagnostics::DiagnosticsStore;
+use crate::runtime::RouteSupervisor;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -66,7 +66,10 @@ impl AppState {
         })
     }
 
-    pub async fn update_settings(&self, settings: ClientSettings) -> Result<ClientSettings, String> {
+    pub async fn update_settings(
+        &self,
+        settings: ClientSettings,
+    ) -> Result<ClientSettings, String> {
         let previous = self.settings.read().await.clone();
         let contents = serde_json::to_vec_pretty(&settings).map_err(|error| error.to_string())?;
         let path = self.data_dir.join("client-settings.json");
@@ -75,10 +78,11 @@ impl AppState {
         fs::rename(&temp_path, &path).map_err(|error| error.to_string())?;
         *self.settings.write().await = settings.clone();
         if previous.auto_start && !settings.auto_start {
-            self.runtime.stop().await.map_err(|error| error.to_string())?;
-        } else if !previous.auto_start
-            && crate::coordinator::should_auto_start(&settings)
-        {
+            self.runtime
+                .stop()
+                .await
+                .map_err(|error| error.to_string())?;
+        } else if !previous.auto_start && crate::coordinator::should_auto_start(&settings) {
             self.runtime
                 .ensure_running(None, None)
                 .await

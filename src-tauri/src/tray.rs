@@ -2,6 +2,8 @@ use crate::client_snapshot::ClientSnapshot;
 use crate::diagnostics::DiagnosticSeverity;
 use crate::logging;
 use std::collections::BTreeMap;
+#[cfg(target_os = "macos")]
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItem};
 #[cfg(not(target_os = "macos"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -63,6 +65,12 @@ impl TrayMenuModel {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn macos_tray_icon() -> tauri::Result<Image<'static>> {
+    const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusbar_template_3x.png");
+    Image::from_bytes(ICON_BYTES)
+}
+
 pub fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: Option<&ClientSnapshot>,
@@ -98,6 +106,11 @@ pub fn build_menu<R: Runtime>(
 
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = build_menu(app, None)?;
+
+    #[cfg(target_os = "macos")]
+    let icon = macos_tray_icon()?;
+
+    #[cfg(not(target_os = "macos"))]
     let icon = app
         .default_window_icon()
         .cloned()

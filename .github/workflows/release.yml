@@ -116,6 +116,17 @@ jobs:
         if: matrix.platform == 'macos'
         run: pnpm tauri build --target universal-apple-darwin
 
+      - name: Remove application icon from macOS DMG volume
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/universal-apple-darwin/release/bundle"
+          dmg_path=$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -type f | head -n 1 || true)
+          test -n "$dmg_path" || { echo "No macOS DMG found" >&2; exit 1; }
+          ./scripts/patch-dmg-volume-icon.sh "$dmg_path"
+          ./scripts/check-dmg-volume-icon.sh "$dmg_path"
+
       - name: Build Linux packages
         if: matrix.platform == 'linux'
         run: pnpm tauri build --bundles appimage,deb,rpm

@@ -1,21 +1,39 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FileInput, Power } from "lucide-react";
+import { FileInput, Power, Server } from "lucide-react";
 import type { ConflictPolicy, ImportCcSwitchRequest, ImportReport, ProviderSummary } from "../api";
 import { displayError } from "../errors";
 
 type ProviderPanelProps = {
   providers: ProviderSummary[];
   busy: boolean;
+  loading?: boolean;
   onSelect: (providerId: string) => void;
   onImport: (request: ImportCcSwitchRequest) => Promise<ImportReport>;
   onError: (message: string) => void;
+  /**
+   * When provided, the parent owns the import panel visibility. Omitting this
+   * prop preserves the original one-click import flow.
+   */
+  importOpen?: boolean;
+  onImportOpenChange?: (open: boolean) => void;
 };
 
-export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: ProviderPanelProps) {
+export function ProviderPanel({
+  providers,
+  busy,
+  loading = false,
+  onSelect,
+  onImport,
+  onError,
+  importOpen,
+  onImportOpenChange,
+}: ProviderPanelProps) {
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("skip");
   const [importing, setImporting] = useState(false);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
+  const importIsControlled = importOpen !== undefined;
+  const importPanelOpen = importOpen === true;
 
   const chooseAndImport = async () => {
     let selected: string | string[] | null;
@@ -44,6 +62,15 @@ export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: 
     }
   };
 
+  const handleImportButtonClick = () => {
+    if (importIsControlled) {
+      onImportOpenChange?.(!importPanelOpen);
+      return;
+    }
+
+    void chooseAndImport();
+  };
+
   return (
     <section className="panel" aria-labelledby="providers-heading">
       <div className="panel-heading">
@@ -53,31 +80,67 @@ export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: 
         </div>
         <span className="count">{providers.length}</span>
       </div>
-      <div className="provider-import">
-        <label className="compact-field" htmlFor="provider-conflict-policy">
-          <span>On conflict</span>
-          <select
-            id="provider-conflict-policy"
-            value={conflictPolicy}
-            onChange={(event) => setConflictPolicy(event.target.value as ConflictPolicy)}
-            disabled={busy || importing}
-          >
-            <option value="skip">Skip existing</option>
-            <option value="replace">Replace existing</option>
-            <option value="rename">Import with new ID</option>
-          </select>
-        </label>
+      <div className={`provider-toolbar provider-import${importIsControlled ? " provider-import-controlled" : ""}`}>
+        {!importIsControlled && (
+          <label className="compact-field" htmlFor="provider-conflict-policy">
+            <span>On conflict</span>
+            <select
+              id="provider-conflict-policy"
+              value={conflictPolicy}
+              onChange={(event) => setConflictPolicy(event.target.value as ConflictPolicy)}
+              disabled={busy || importing}
+            >
+              <option value="skip">Skip existing</option>
+              <option value="replace">Replace existing</option>
+              <option value="rename">Import with new ID</option>
+            </select>
+          </label>
+        )}
         <button
-          className="button secondary"
-          onClick={() => void chooseAndImport()}
+          className="button secondary provider-import-trigger"
+          type="button"
+          onClick={handleImportButtonClick}
           disabled={busy || importing}
+          aria-expanded={importIsControlled ? importPanelOpen : undefined}
+          aria-controls={importIsControlled ? "provider-import-panel" : undefined}
         >
           <FileInput size={16} aria-hidden="true" />
           {importing ? "Importing..." : "Import cc-switch"}
         </button>
       </div>
+      {importIsControlled && importPanelOpen && (
+        <div
+          className="provider-import-panel"
+          id="provider-import-panel"
+          role="region"
+          aria-label="Import cc-switch providers"
+        >
+          <label className="compact-field" htmlFor="provider-conflict-policy">
+            <span>On conflict</span>
+            <select
+              id="provider-conflict-policy"
+              value={conflictPolicy}
+              onChange={(event) => setConflictPolicy(event.target.value as ConflictPolicy)}
+              disabled={busy || importing}
+            >
+              <option value="skip">Skip existing</option>
+              <option value="replace">Replace existing</option>
+              <option value="rename">Import with new ID</option>
+            </select>
+          </label>
+          <button
+            className="button secondary import-file-button"
+            type="button"
+            onClick={() => void chooseAndImport()}
+            disabled={busy || importing}
+          >
+            <FileInput size={16} aria-hidden="true" />
+            {importing ? "Importing..." : "Choose database"}
+          </button>
+        </div>
+      )}
       {importReport && (
-        <div className="import-result" role="status" aria-live="polite">
+        <div className="import-feedback import-result" role="status" aria-live="polite">
           <strong>Import complete</strong>
           <span>
             Imported {importReport.imported} · Replaced {importReport.replaced} · Renamed {importReport.renamed} · Skipped {importReport.skipped} · Rejected {importReport.rejected.length}
@@ -97,18 +160,50 @@ export function ProviderPanel({ providers, busy, onSelect, onImport, onError }: 
           )}
         </div>
       )}
-      {providers.length === 0 ? (
-        <p className="muted">No providers available.</p>
+      {loading ? (
+        <div className="provider-list provider-skeleton-list" role="status" aria-label="Loading providers">
+          {["skeleton-a", "skeleton-b", "skeleton-c"].map((id) => (
+            <div className="provider-skeleton" key={id} aria-hidden="true">
+              <span className="provider-skeleton-icon" />
+              <span className="provider-skeleton-copy"><span /><span /></span>
+              <span className="provider-skeleton-action" />
+            </div>
+          ))}
+        </div>
+      ) : providers.length === 0 ? (
+        <div className="empty-state provider-empty-state" role="status">
+          <span className="empty-state-icon" aria-hidden="true"><Server size={20} /></span>
+          <div>
+            <strong>No providers yet</strong>
+            <p className="muted">Import a cc-switch database to add a provider for local requests.</p>
+            <button className="button-primary empty-action" type="button" onClick={handleImportButtonClick} disabled={busy || importing}>
+              <FileInput size={15} aria-hidden="true" />
+              Import database
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="provider-list">
           {providers.map((provider) => (
-            <div className="provider-row" key={provider.id}>
-              <div>
-                <strong>{provider.name}</strong>
-                <span className="muted">{provider.id} · {provider.source}</span>
+            <div
+              className={`provider-item provider-row${provider.isCurrent ? " current" : ""}`}
+              key={provider.id}
+              data-provider-id={provider.id}
+              data-provider-current={provider.isCurrent ? "true" : "false"}
+            >
+              <div className="provider-summary">
+                <span className="provider-icon" aria-hidden="true"><Server size={18} /></span>
+                <span
+                  className={`provider-status-dot${provider.isCurrent ? " active" : ""}`}
+                  aria-hidden="true"
+                />
+                <div>
+                  <strong>{provider.name}</strong>
+                  <span className="muted">{provider.id} · {provider.source}</span>
+                </div>
               </div>
               <button
-                className={provider.isCurrent ? "badge current" : "button secondary"}
+                className={provider.isCurrent ? "badge current current-state" : "button secondary"}
                 onClick={() => onSelect(provider.id)}
                 disabled={busy || provider.isCurrent}
               >

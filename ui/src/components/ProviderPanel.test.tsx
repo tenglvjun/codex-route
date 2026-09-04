@@ -110,4 +110,103 @@ describe("ProviderPanel", () => {
     await waitFor(() => expect(onError).toHaveBeenCalledWith("database is locked"));
     expect(screen.getByRole("button", { name: "Import cc-switch" })).toHaveProperty("disabled", false);
   });
+
+  it("uses the controlled import button to toggle the compact import panel", async () => {
+    const onImportOpenChange = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      providers: [],
+      busy: false,
+      onSelect: vi.fn(),
+      onImport: vi.fn(),
+      onError: vi.fn(),
+      importOpen: false,
+      onImportOpenChange,
+    };
+    const { rerender } = render(<ProviderPanel {...props} />);
+
+    const importButton = screen.getByRole("button", { name: "Import cc-switch" });
+    expect(importButton.getAttribute("aria-expanded")).toBe("false");
+    await user.click(importButton);
+
+    expect(onImportOpenChange).toHaveBeenCalledWith(true);
+    expect(open).not.toHaveBeenCalled();
+
+    rerender(<ProviderPanel {...props} importOpen={true} />);
+    expect(screen.getByLabelText("On conflict")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose database" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
+    expect(onImportOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("imports from the compact controlled import panel", async () => {
+    vi.mocked(open).mockResolvedValue("/tmp/cc-switch.db");
+    const onImport = vi.fn().mockResolvedValue(report);
+    const user = userEvent.setup();
+    render(
+      <ProviderPanel
+        providers={[]}
+        busy={false}
+        onSelect={vi.fn()}
+        onImport={onImport}
+        onError={vi.fn()}
+        importOpen
+        onImportOpenChange={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("On conflict"), "rename");
+    await user.click(screen.getByRole("button", { name: "Choose database" }));
+
+    await waitFor(() =>
+      expect(onImport).toHaveBeenCalledWith({
+        databasePath: "/tmp/cc-switch.db",
+        conflictPolicy: "rename",
+      }),
+    );
+    expect(await screen.findByText("Import complete")).toBeTruthy();
+  });
+
+  it("shows row-shaped placeholders while providers are loading", () => {
+    render(
+      <ProviderPanel
+        providers={[]}
+        busy={true}
+        loading
+        onSelect={vi.fn()}
+        onImport={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    const loadingState = screen.getByRole("status", { name: "Loading providers" });
+    expect(loadingState.querySelectorAll(".provider-skeleton")).toHaveLength(3);
+    expect(screen.queryByText("No providers yet")).toBeNull();
+  });
+
+  it("marks the current provider and selects a different provider", async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <ProviderPanel
+        providers={[
+          { id: "provider-a", name: "Provider A", source: "local", isCurrent: true },
+          { id: "provider-b", name: "Provider B", source: "imported", isCurrent: false },
+        ]}
+        busy={false}
+        onSelect={onSelect}
+        onImport={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    const currentRow = container.querySelector('[data-provider-id="provider-a"]');
+    expect(currentRow?.querySelector(".provider-status-dot.active")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Current" })).toHaveProperty("disabled", true);
+
+    await user.click(screen.getByRole("button", { name: "Use provider" }));
+
+    expect(onSelect).toHaveBeenCalledWith("provider-b");
+  });
 });

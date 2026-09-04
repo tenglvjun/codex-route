@@ -53,6 +53,20 @@ describe("App", () => {
     vi.mocked(desktopApi.getLifecycleStatus).mockResolvedValue(inactiveStatus);
   });
 
+  it("renders the desktop client toolbar and provider workspace", async () => {
+    render(<App />);
+
+    expect(screen.getByRole("main")).toBeTruthy();
+    expect(screen.getByRole("banner", { name: "Codex Route navigation" })).toBeTruthy();
+    expect(document.querySelectorAll("img.brand-logo")).toHaveLength(2);
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Workspace rules" }).getAttribute("aria-selected")).toBe("false");
+    expect(await screen.findByRole("heading", { name: "Default fallback provider" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Activate route" }).getAttribute("data-route-state")).toBe(
+      "inactive",
+    );
+  });
+
   it("rejects an invalid route port before invoking Tauri", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -84,7 +98,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Default fallback provider" });
 
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
+    await user.click(screen.getByRole("button", { name: "Import providers" }));
+    await user.click(screen.getByRole("button", { name: "Choose database" }));
 
     await waitFor(() =>
       expect(desktopApi.importCcSwitchProviders).toHaveBeenCalledWith({

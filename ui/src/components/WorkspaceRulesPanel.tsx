@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { FolderOpen, FolderTree, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ProviderSummary, UpsertRouteRuleRequest, WorkspaceRouteRule } from "../api";
 import { displayError } from "../errors";
 
@@ -11,6 +11,7 @@ type WorkspaceRulesPanelProps = {
   onSave: (request: UpsertRouteRuleRequest) => Promise<void>;
   onRemove: (workspace: string) => Promise<boolean>;
   onError: (message: string) => void;
+  onClose?: () => void;
 };
 
 type FormErrors = {
@@ -31,6 +32,7 @@ export function WorkspaceRulesPanel({
   onSave,
   onRemove,
   onError,
+  onClose,
 }: WorkspaceRulesPanelProps) {
   const [workspace, setWorkspace] = useState("");
   const [providerId, setProviderId] = useState("");
@@ -141,10 +143,23 @@ export function WorkspaceRulesPanel({
           <p className="eyebrow">WORKSPACE ROUTING</p>
           <h2 id="rules-heading">Project provider rules</h2>
         </div>
-        <span className="count">{rules.length}</span>
+        <div className="panel-heading-actions">
+          <span className="count">{rules.length}</span>
+          {onClose && (
+            <button
+              type="button"
+              className="icon-button panel-close-button"
+              onClick={onClose}
+              aria-label="Close workspace rules"
+              title="Close workspace rules"
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
 
-      <form className="rule-form" onSubmit={submitRule} noValidate>
+      <form className="rule-form rules-form-surface" onSubmit={submitRule} noValidate>
         <div className="form-heading">
           <strong>{editingWorkspace ? "Edit workspace rule" : "Add workspace rule"}</strong>
           {editingWorkspace && (
@@ -222,18 +237,24 @@ export function WorkspaceRulesPanel({
       </form>
 
       {rules.length === 0 ? (
-        <div className="empty-state"><strong>No workspace rules</strong></div>
+        <div className="empty-state rules-empty-state" role="status">
+          <FolderTree size={30} aria-hidden="true" />
+          <div>
+            <strong>No workspace rules</strong>
+            <p className="muted">Add a workspace route to choose its default provider.</p>
+          </div>
+        </div>
       ) : (
         <div className="rules-list">
           {rules.map((rule) => (
-            <div className="rule-row" key={rule.workspace}>
-              <div className="rule-details">
+            <div className="rule-row rule-item" key={rule.workspace}>
+              <div className="rule-details rule-meta">
                 <strong>{rule.workspace}</strong>
                 <span className="muted">
                   {providerNames.get(rule.providerId) || rule.providerId} · Updated {formatDate(rule.updatedAt)}
                 </span>
               </div>
-              <div className="row-actions">
+              <div className="row-actions rule-actions">
                 <button
                   className="icon-button"
                   onClick={() => editRule(rule)}

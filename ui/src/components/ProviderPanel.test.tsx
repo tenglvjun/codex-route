@@ -168,6 +168,23 @@ describe("ProviderPanel", () => {
     expect(await screen.findByText("Import complete")).toBeTruthy();
   });
 
+  it("shows row-shaped placeholders while providers are loading", () => {
+    render(
+      <ProviderPanel
+        providers={[]}
+        busy={true}
+        loading
+        onSelect={vi.fn()}
+        onImport={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    const loadingState = screen.getByRole("status", { name: "Loading providers" });
+    expect(loadingState.querySelectorAll(".provider-skeleton")).toHaveLength(3);
+    expect(screen.queryByText("No providers yet")).toBeNull();
+  });
+
   it("marks the current provider and selects a different provider", async () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();

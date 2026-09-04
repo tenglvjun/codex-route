@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FileInput, Power } from "lucide-react";
+import { FileInput, Power, Server } from "lucide-react";
 import type { ConflictPolicy, ImportCcSwitchRequest, ImportReport, ProviderSummary } from "../api";
 import { displayError } from "../errors";
 
 type ProviderPanelProps = {
   providers: ProviderSummary[];
   busy: boolean;
+  loading?: boolean;
   onSelect: (providerId: string) => void;
   onImport: (request: ImportCcSwitchRequest) => Promise<ImportReport>;
   onError: (message: string) => void;
@@ -21,6 +22,7 @@ type ProviderPanelProps = {
 export function ProviderPanel({
   providers,
   busy,
+  loading = false,
   onSelect,
   onImport,
   onError,
@@ -158,13 +160,39 @@ export function ProviderPanel({
           )}
         </div>
       )}
-      {providers.length === 0 ? (
-        <p className="muted">No providers available.</p>
+      {loading ? (
+        <div className="provider-list provider-skeleton-list" role="status" aria-label="Loading providers">
+          {["skeleton-a", "skeleton-b", "skeleton-c"].map((id) => (
+            <div className="provider-skeleton" key={id} aria-hidden="true">
+              <span className="provider-skeleton-icon" />
+              <span className="provider-skeleton-copy"><span /><span /></span>
+              <span className="provider-skeleton-action" />
+            </div>
+          ))}
+        </div>
+      ) : providers.length === 0 ? (
+        <div className="empty-state provider-empty-state" role="status">
+          <span className="empty-state-icon" aria-hidden="true"><Server size={20} /></span>
+          <div>
+            <strong>No providers yet</strong>
+            <p className="muted">Import a cc-switch database to add a provider for local requests.</p>
+            <button className="button-primary empty-action" type="button" onClick={handleImportButtonClick} disabled={busy || importing}>
+              <FileInput size={15} aria-hidden="true" />
+              Import database
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="provider-list">
           {providers.map((provider) => (
-            <div className="provider-item provider-row" key={provider.id} data-provider-id={provider.id}>
+            <div
+              className={`provider-item provider-row${provider.isCurrent ? " current" : ""}`}
+              key={provider.id}
+              data-provider-id={provider.id}
+              data-provider-current={provider.isCurrent ? "true" : "false"}
+            >
               <div className="provider-summary">
+                <span className="provider-icon" aria-hidden="true"><Server size={18} /></span>
                 <span
                   className={`provider-status-dot${provider.isCurrent ? " active" : ""}`}
                   aria-hidden="true"

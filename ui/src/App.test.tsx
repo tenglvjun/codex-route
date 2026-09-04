@@ -57,7 +57,8 @@ describe("App", () => {
     render(<App />);
 
     expect(screen.getByRole("main")).toBeTruthy();
-    expect(screen.getByRole("banner", { name: "Codex Route toolbar" })).toBeTruthy();
+    expect(screen.getByRole("banner", { name: "Codex Route navigation" })).toBeTruthy();
+    expect(document.querySelectorAll("img.brand-logo")).toHaveLength(2);
     expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Workspace rules" }).getAttribute("aria-selected")).toBe("false");
     expect(await screen.findByRole("heading", { name: "Default fallback provider" })).toBeTruthy();

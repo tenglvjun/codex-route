@@ -171,8 +171,8 @@ impl SessionWorkspaceIndex {
             .collect::<BTreeSet<_>>();
 
         let mut workspaces = grouped
-            .into_iter()
-            .map(|(_, builder)| builder.finish(&ambiguous_sessions))
+            .into_values()
+            .map(|builder| builder.finish(&ambiguous_sessions))
             .collect::<Vec<_>>();
         workspaces.sort_by(|left, right| {
             compare_activity_desc(left.last_activity, right.last_activity)

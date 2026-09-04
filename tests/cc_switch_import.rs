@@ -1,4 +1,5 @@
-use codex_route::cc_switch_import::CcSwitchImporter;
+use codex_route::cc_switch_import::{CcSwitchImportError, CcSwitchImporter, ConflictPolicy};
+use codex_route::provider_store::ProviderStore;
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::fs;
@@ -94,4 +95,45 @@ fn scans_only_codex_rows_and_leaves_source_unchanged() {
             .is_some_and(|id| id != "claude-row")
     }));
     assert_eq!(fs::read(&source).unwrap(), before);
+}
+
+#[test]
+fn imports_only_selected_cc_switch_providers() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("cc-switch.db");
+    create_source(&source);
+    let scan = CcSwitchImporter::new(&source)
+        .read_codex_providers()
+        .unwrap();
+
+    let selected = scan.select_provider_ids(&["keyless".to_string()]).unwrap();
+    let store = ProviderStore::open(directory.path().join("codex-route.db")).unwrap();
+    let report = store
+        .import_scan_transaction(&selected, ConflictPolicy::Skip)
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(report.rejected.len(), 2);
+    let providers = store.list().unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].source.source_id(), Some("keyless"));
+}
+
+#[test]
+fn rejects_provider_ids_that_are_not_in_the_latest_scan() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("cc-switch.db");
+    create_source(&source);
+    let scan = CcSwitchImporter::new(&source)
+        .read_codex_providers()
+        .unwrap();
+
+    let error = scan
+        .select_provider_ids(&["missing".to_string()])
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CcSwitchImportError::UnknownProviders(ids) if ids == vec!["missing".to_string()]
+    ));
 }

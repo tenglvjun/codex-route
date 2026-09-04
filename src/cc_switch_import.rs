@@ -37,6 +37,45 @@ pub struct ImportScan {
     pub rejected: Vec<RejectedProvider>,
 }
 
+impl ImportScan {
+    pub fn select_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Self, CcSwitchImportError> {
+        let requested: HashSet<&str> = provider_ids.iter().map(String::as_str).collect();
+        let available: HashSet<&str> = self
+            .candidates
+            .iter()
+            .filter_map(|candidate| candidate.provider.source.source_id())
+            .collect();
+        let mut unknown: Vec<String> = requested
+            .difference(&available)
+            .map(|id| (*id).to_string())
+            .collect();
+        unknown.sort();
+        if !unknown.is_empty() {
+            return Err(CcSwitchImportError::UnknownProviders(unknown));
+        }
+
+        Ok(Self {
+            source: self.source.clone(),
+            candidates: self
+                .candidates
+                .iter()
+                .filter(|candidate| {
+                    candidate
+                        .provider
+                        .source
+                        .source_id()
+                        .is_some_and(|id| requested.contains(id))
+                })
+                .cloned()
+                .collect(),
+            rejected: self.rejected.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportReport {
     pub source: PathBuf,
@@ -71,6 +110,8 @@ pub enum CcSwitchImportError {
     Schema(String),
     #[error("cc-switch database query error: {0}")]
     Query(#[from] rusqlite::Error),
+    #[error("selected cc-switch providers were not found: {}", .0.join(", "))]
+    UnknownProviders(Vec<String>),
 }
 
 pub struct CcSwitchImporter {

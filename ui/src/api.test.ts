@@ -17,8 +17,9 @@ describe("desktopApi", () => {
     });
     await desktopApi.removeRouteRule("/tmp/project");
     await desktopApi.activateRoute(16729);
+    await desktopApi.scanCcSwitchProviders();
     await desktopApi.importCcSwitchProviders({
-      databasePath: "/tmp/cc-switch.db",
+      providerIds: ["provider-a", "provider-b"],
       conflictPolicy: "replace",
     });
 
@@ -31,9 +32,10 @@ describe("desktopApi", () => {
     expect(invoke).toHaveBeenNthCalledWith(3, "activate_route", {
       request: { port: 16729 },
     });
-    expect(invoke).toHaveBeenNthCalledWith(4, "import_cc_switch_providers", {
+    expect(invoke).toHaveBeenNthCalledWith(4, "scan_cc_switch_providers");
+    expect(invoke).toHaveBeenNthCalledWith(5, "import_cc_switch_providers", {
       request: {
-        databasePath: "/tmp/cc-switch.db",
+        providerIds: ["provider-a", "provider-b"],
         conflictPolicy: "replace",
       },
     });

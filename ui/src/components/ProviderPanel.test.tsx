@@ -3,11 +3,8 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { open } from "@tauri-apps/plugin-dialog";
-import type { ImportReport } from "../api";
+import type { CcSwitchScanReport, ImportReport } from "../api";
 import { ProviderPanel } from "./ProviderPanel";
-
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const report: ImportReport = {
   source: "/tmp/cc-switch.db",
@@ -18,154 +15,116 @@ const report: ImportReport = {
   rejected: [{ id: "invalid", reason: "missing base_url" }],
 };
 
+const scanReport: CcSwitchScanReport = {
+  source: "/tmp/cc-switch.db",
+  providers: [
+    { id: "provider-a", name: "Provider A", category: "Official", alreadyImported: false },
+    { id: "provider-b", name: "Provider B", alreadyImported: true },
+  ],
+  rejected: [{ id: "invalid", reason: "missing base_url" }],
+};
+
 afterEach(cleanup);
 
 describe("ProviderPanel", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("imports a selected cc-switch database with the chosen conflict policy", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/cc-switch.db");
+  it("scans on open and selects every importable provider by default", async () => {
+    const onScan = vi.fn().mockResolvedValue(scanReport);
     const onImport = vi.fn().mockResolvedValue(report);
-    const user = userEvent.setup();
     render(
       <ProviderPanel
         providers={[]}
         busy={false}
         onSelect={vi.fn()}
+        onScan={onScan}
         onImport={onImport}
-        onError={vi.fn()}
-      />,
-    );
-
-    await user.selectOptions(screen.getByLabelText("On conflict"), "replace");
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
-
-    await waitFor(() =>
-      expect(onImport).toHaveBeenCalledWith({
-        databasePath: "/tmp/cc-switch.db",
-        conflictPolicy: "replace",
-      }),
-    );
-    expect(await screen.findByText("Import complete")).toBeTruthy();
-    expect(screen.getByText("Imported 2 · Replaced 1 · Renamed 0 · Skipped 3 · Rejected 1")).toBeTruthy();
-    expect(screen.getByText("invalid: missing base_url")).toBeTruthy();
-  });
-
-  it("does nothing when database selection is cancelled", async () => {
-    vi.mocked(open).mockResolvedValue(null);
-    const onImport = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <ProviderPanel
-        providers={[]}
-        busy={false}
-        onSelect={vi.fn()}
-        onImport={onImport}
-        onError={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
-
-    expect(open).toHaveBeenCalledOnce();
-    expect(onImport).not.toHaveBeenCalled();
-  });
-
-  it("surfaces file picker errors", async () => {
-    vi.mocked(open).mockRejectedValue(new Error("dialog unavailable"));
-    const onError = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <ProviderPanel
-        providers={[]}
-        busy={false}
-        onSelect={vi.fn()}
-        onImport={vi.fn()}
-        onError={onError}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
-
-    await waitFor(() => expect(onError).toHaveBeenCalledWith("dialog unavailable"));
-  });
-
-  it("surfaces import failures and resets the busy state", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/cc-switch.db");
-    const onImport = vi.fn().mockRejectedValue(new Error("database is locked"));
-    const onError = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <ProviderPanel
-        providers={[]}
-        busy={false}
-        onSelect={vi.fn()}
-        onImport={onImport}
-        onError={onError}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
-
-    await waitFor(() => expect(onError).toHaveBeenCalledWith("database is locked"));
-    expect(screen.getByRole("button", { name: "Import cc-switch" })).toHaveProperty("disabled", false);
-  });
-
-  it("uses the controlled import button to toggle the compact import panel", async () => {
-    const onImportOpenChange = vi.fn();
-    const user = userEvent.setup();
-    const props = {
-      providers: [],
-      busy: false,
-      onSelect: vi.fn(),
-      onImport: vi.fn(),
-      onError: vi.fn(),
-      importOpen: false,
-      onImportOpenChange,
-    };
-    const { rerender } = render(<ProviderPanel {...props} />);
-
-    const importButton = screen.getByRole("button", { name: "Import cc-switch" });
-    expect(importButton.getAttribute("aria-expanded")).toBe("false");
-    await user.click(importButton);
-
-    expect(onImportOpenChange).toHaveBeenCalledWith(true);
-    expect(open).not.toHaveBeenCalled();
-
-    rerender(<ProviderPanel {...props} importOpen={true} />);
-    expect(screen.getByLabelText("On conflict")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Choose database" })).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
-    expect(onImportOpenChange).toHaveBeenLastCalledWith(false);
-  });
-
-  it("imports from the compact controlled import panel", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/cc-switch.db");
-    const onImport = vi.fn().mockResolvedValue(report);
-    const user = userEvent.setup();
-    render(
-      <ProviderPanel
-        providers={[]}
-        busy={false}
-        onSelect={vi.fn()}
-        onImport={onImport}
-        onError={vi.fn()}
         importOpen
         onImportOpenChange={vi.fn()}
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText("On conflict"), "rename");
-    await user.click(screen.getByRole("button", { name: "Choose database" }));
+    expect(await screen.findByRole("dialog", { name: "Import from cc-switch" })).toBeTruthy();
+    expect(onScan).toHaveBeenCalledOnce();
+    const providerCheckboxes = screen.getAllByRole("checkbox", { name: /Provider [AB]/ });
+    expect(providerCheckboxes).toHaveLength(2);
+    expect(providerCheckboxes.every((checkbox) => (checkbox as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    expect(onImport).not.toHaveBeenCalled();
+  });
+
+  it("imports only the checked providers with the chosen conflict policy", async () => {
+    const onImport = vi.fn().mockResolvedValue(report);
+    const user = userEvent.setup();
+    render(
+      <ProviderPanel
+        providers={[]}
+        busy={false}
+        onSelect={vi.fn()}
+        onScan={vi.fn().mockResolvedValue(scanReport)}
+        onImport={onImport}
+        importOpen
+        onImportOpenChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("checkbox", { name: /Provider A/ });
+    await user.click(screen.getByRole("checkbox", { name: /Provider B/ }));
+    await user.selectOptions(screen.getByLabelText("On conflict"), "replace");
+    await user.click(screen.getByRole("button", { name: "Import selected (1)" }));
 
     await waitFor(() =>
       expect(onImport).toHaveBeenCalledWith({
-        databasePath: "/tmp/cc-switch.db",
-        conflictPolicy: "rename",
+        providerIds: ["provider-a"],
+        conflictPolicy: "replace",
       }),
     );
     expect(await screen.findByText("Import complete")).toBeTruthy();
+    expect(screen.getByText("Imported 2 · Replaced 1 · Renamed 0 · Skipped 3 · Rejected 1")).toBeTruthy();
+  });
+
+  it("shows scan failures in the dialog and retries", async () => {
+    const onScan = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("cc-switch database was not found"))
+      .mockResolvedValue(scanReport);
+    const user = userEvent.setup();
+    render(
+      <ProviderPanel
+        providers={[]}
+        busy={false}
+        onSelect={vi.fn()}
+        onScan={onScan}
+        onImport={vi.fn()}
+        importOpen
+        onImportOpenChange={vi.fn()}
+      />,
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toContain("cc-switch database was not found");
+    await user.click(screen.getByRole("button", { name: "Retry scan" }));
+    expect(await screen.findByRole("checkbox", { name: /Provider A/ })).toBeTruthy();
+    expect(onScan).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the controlled import button to open the import dialog", async () => {
+    const onImportOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProviderPanel
+        providers={[]}
+        busy={false}
+        onSelect={vi.fn()}
+        onScan={vi.fn().mockResolvedValue(scanReport)}
+        onImport={vi.fn()}
+        importOpen={false}
+        onImportOpenChange={onImportOpenChange}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Import cc-switch" }));
+
+    expect(onImportOpenChange).toHaveBeenCalledWith(true);
   });
 
   it("shows row-shaped placeholders while providers are loading", () => {
@@ -175,8 +134,8 @@ describe("ProviderPanel", () => {
         busy={true}
         loading
         onSelect={vi.fn()}
+        onScan={vi.fn()}
         onImport={vi.fn()}
-        onError={vi.fn()}
       />,
     );
 
@@ -196,8 +155,8 @@ describe("ProviderPanel", () => {
         ]}
         busy={false}
         onSelect={onSelect}
+        onScan={vi.fn()}
         onImport={vi.fn()}
-        onError={vi.fn()}
       />,
     );
 

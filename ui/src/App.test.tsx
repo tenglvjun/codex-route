@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { desktopApi, type ClientSnapshot, type LifecycleStatus, type ProviderSummary } from "./api";
@@ -25,6 +25,8 @@ vi.mock("./api", () => ({
     stopRuntime: vi.fn(),
     setWorkspaceProvider: vi.fn(),
     clearDiagnostics: vi.fn(),
+    getClientSettings: vi.fn(),
+    setClientSettings: vi.fn(),
   },
 }));
 
@@ -101,9 +103,31 @@ describe("App", () => {
     vi.mocked(clientFacade.getDiagnostics).mockResolvedValue([]);
     vi.mocked(clientFacade.subscribe).mockResolvedValue(vi.fn());
     vi.mocked(clientFacade.subscribeDiagnostics).mockResolvedValue(vi.fn());
+    vi.mocked(desktopApi.getClientSettings).mockResolvedValue({
+      autoStart: true,
+      startupConsentGranted: false,
+      port: 16729,
+      launchAtLogin: false,
+      closeToTray: true,
+      language: "system",
+      theme: "system",
+    });
+    vi.mocked(desktopApi.setClientSettings).mockImplementation(async (settings) => settings);
   });
 
   it("renders the desktop client toolbar and provider workspace", async () => {
+    vi.mocked(clientFacade.loadSnapshot).mockResolvedValue({
+      ...clientSnapshot,
+      workspaces: [{
+        path: "/tmp/project",
+        exists: true,
+        sessionId: "session-1",
+        sessionIds: ["session-1"],
+        threadIds: ["thread-1"],
+        providerId: "provider-a",
+        conflictingWorkspaces: false,
+      }],
+    });
     const user = userEvent.setup();
     render(<App />);
 
@@ -113,20 +137,25 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.queryByRole("tab", { name: "Workspace rules" })).toBeNull();
-    expect(await screen.findByRole("heading", { name: "Workspace routes" })).toBeTruthy();
-    const routeSettings = screen.getByRole("button", { name: "Configure routes" });
-    expect(routeSettings.getAttribute("aria-expanded")).toBe("false");
-    await user.click(routeSettings);
-    expect(await screen.findByRole("dialog", { name: "Workspace rules" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Hide route settings" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Close workspace rules" }));
+    expect(await screen.findByRole("region", { name: "Workspace routes" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Overview" }).querySelector(".nav-count")?.textContent).toBe("1");
+    expect(screen.queryByRole("button", { name: "Configure routes" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Workspace rules" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Configure routes" }).getAttribute("aria-expanded")).toBe("false");
     await user.click(screen.getByRole("tab", { name: "Providers" }));
-    expect(await screen.findByRole("heading", { name: "Providers", level: 2 })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Providers" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Providers" }).querySelector(".nav-count")?.textContent).toBe("1");
     expect(screen.getByRole("switch", { name: "Activate route" }).getAttribute("data-route-state")).toBe(
       "inactive",
     );
+  });
+
+  it("suppresses native context menus in the desktop shell", async () => {
+    render(<App />);
+
+    const event = createEvent.contextMenu(screen.getByRole("main"));
+    fireEvent(screen.getByRole("main"), event);
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("activates the route from the global toggle with the default port", async () => {
@@ -137,6 +166,72 @@ describe("App", () => {
     await user.click(routeToggle);
 
     await waitFor(() => expect(desktopApi.activateRoute).toHaveBeenCalledWith(16729));
+  });
+
+  it("uses the saved Settings port when activating from the global toggle", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    const port = await screen.findByRole("spinbutton", { name: "Route port" });
+    await user.clear(port);
+    await user.type(port, "23456");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(desktopApi.setClientSettings).toHaveBeenCalledWith({
+      autoStart: true,
+      startupConsentGranted: false,
+      port: 23456,
+      launchAtLogin: false,
+      closeToTray: true,
+      language: "system",
+      theme: "system",
+    }));
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    await user.click(await screen.findByRole("switch", { name: "Activate route" }));
+
+    await waitFor(() => expect(desktopApi.activateRoute).toHaveBeenCalledWith(23456));
+  });
+
+  it("saves the default provider and port from one Settings action", async () => {
+    const providerB: ProviderSummary = {
+      id: "provider-b",
+      name: "Provider B",
+      source: "cc-switch",
+      isCurrent: false,
+    };
+    const snapshotWithProviders = {
+      ...clientSnapshot,
+      providers: [provider, providerB],
+    };
+    vi.mocked(clientFacade.loadSnapshot).mockResolvedValue(snapshotWithProviders);
+    vi.mocked(desktopApi.setCurrentProvider).mockResolvedValue({ ...providerB, isCurrent: true });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    const providerTrigger = await screen.findByRole("button", { name: "Default route provider" });
+    await waitFor(() => expect(providerTrigger).toHaveProperty("disabled", false));
+    await user.click(providerTrigger);
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Provider B" }));
+    expect(screen.getByRole("button", { name: "Default route provider" }).textContent).toContain("Provider B");
+    const port = screen.getByRole("spinbutton", { name: "Route port" });
+    await user.clear(port);
+    await user.type(port, "23456");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(desktopApi.setCurrentProvider).toHaveBeenCalledWith("provider-b");
+      expect(desktopApi.setClientSettings).toHaveBeenCalledWith({
+        autoStart: true,
+        startupConsentGranted: false,
+        port: 23456,
+        launchAtLogin: false,
+        closeToTray: true,
+        language: "system",
+        theme: "system",
+      });
+    });
   });
 
   it("scans automatically and imports the selected providers", async () => {
@@ -162,7 +257,7 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("tab", { name: "Providers" }));
-    await screen.findByRole("heading", { name: "Providers", level: 2 });
+    await screen.findByRole("region", { name: "Providers" });
 
     await user.click(screen.getByRole("button", { name: "Import providers from cc-switch" }));
     expect(await screen.findByRole("dialog", { name: "Import from cc-switch" })).toBeTruthy();

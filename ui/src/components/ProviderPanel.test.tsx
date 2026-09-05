@@ -70,7 +70,8 @@ describe("ProviderPanel", () => {
 
     await screen.findByRole("checkbox", { name: /Provider A/ });
     await user.click(screen.getByRole("checkbox", { name: /Provider B/ }));
-    await user.selectOptions(screen.getByLabelText("On conflict"), "replace");
+    await user.click(screen.getByRole("button", { name: "On conflict" }));
+    await user.click(screen.getByRole("listbox").querySelector('[role="option"][aria-selected="false"]')!);
     await user.click(screen.getByRole("button", { name: "Import selected (1)" }));
 
     await waitFor(() =>
@@ -127,6 +128,26 @@ describe("ProviderPanel", () => {
     expect(onImportOpenChange).toHaveBeenCalledWith(true);
   });
 
+  it("renders a titled provider page with the import action", () => {
+    const { container } = render(
+      <ProviderPanel
+        providers={[]}
+        busy={false}
+        onSelect={vi.fn()}
+        onScan={vi.fn()}
+        onImport={vi.fn()}
+        importOpen={false}
+        onImportOpenChange={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector(".provider-heading")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Providers", level: 1 })).toBeTruthy();
+    expect(screen.getByText("Manage your connection providers.")).toBeTruthy();
+    expect(container.querySelector(".panel-heading")).toBeNull();
+    expect(screen.getByRole("button", { name: "Import providers from cc-switch" })).toBeTruthy();
+  });
+
   it("shows row-shaped placeholders while providers are loading", () => {
     render(
       <ProviderPanel
@@ -162,6 +183,7 @@ describe("ProviderPanel", () => {
 
     const currentRow = container.querySelector('[data-provider-id="provider-a"]');
     expect(currentRow?.querySelector(".provider-status-dot.active")).toBeTruthy();
+    expect(currentRow?.getAttribute("role")).toBe("listitem");
     expect(screen.getByRole("button", { name: "Current" })).toHaveProperty("disabled", true);
 
     await user.click(screen.getByRole("button", { name: "Use provider" }));

@@ -14,41 +14,61 @@ import {
   type ImportReport,
   type LifecycleStatus,
   type ProviderSummary,
-  type UpsertRouteRuleRequest,
-  type WorkspaceRouteRule,
 } from "./api";
 import { ProviderPanel } from "./components/ProviderPanel";
-import { WorkspaceRulesPanel } from "./components/WorkspaceRulesPanel";
 import { displayError } from "./errors";
 import { clientFacade } from "./clientFacade";
-import type { ClientSnapshot, DiagnosticRecord } from "./api";
+import type { ClientSettings, ClientSnapshot, DiagnosticRecord } from "./api";
 import { DashboardPage } from "./components/DashboardPage";
 import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
+import { applyTheme } from "./theme";
+import { createTranslator, I18nProvider, resolveLocale, type Translator } from "./i18n";
 
 const DEFAULT_PORT = 16729;
+const DEFAULT_SETTINGS: ClientSettings = {
+  autoStart: true,
+  startupConsentGranted: false,
+  port: DEFAULT_PORT,
+  launchAtLogin: false,
+  closeToTray: true,
+  language: "system",
+  theme: "system",
+};
 type ActiveView = "dashboard" | "providers" | "settings";
 
-function App() {
+type AppProps = { initialSettings?: ClientSettings };
+
+function App({ initialSettings = DEFAULT_SETTINGS }: AppProps) {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
-  const [rules, setRules] = useState<WorkspaceRouteRule[]>([]);
   const [status, setStatus] = useState<LifecycleStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [port, setPort] = useState(String(DEFAULT_PORT));
+  const [clientSettings, setClientSettings] = useState<ClientSettings>({
+    ...DEFAULT_SETTINGS,
+    ...initialSettings,
+    launchAtLogin: initialSettings.launchAtLogin ?? DEFAULT_SETTINGS.launchAtLogin,
+    closeToTray: initialSettings.closeToTray ?? DEFAULT_SETTINGS.closeToTray,
+    language: initialSettings.language ?? DEFAULT_SETTINGS.language,
+    theme: initialSettings.theme ?? DEFAULT_SETTINGS.theme,
+  });
+  const [port, setPort] = useState(String(initialSettings.port));
+  const [settingsProviderId, setSettingsProviderId] = useState("");
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [importOpen, setImportOpen] = useState(false);
-  const [workspaceRulesOpen, setWorkspaceRulesOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [clientSnapshot, setClientSnapshot] = useState<ClientSnapshot | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticRecord[]>([]);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const locale = resolveLocale(clientSettings.language ?? "system");
+  const t: Translator = useMemo(() => createTranslator(locale), [locale]);
+
+  useEffect(() => applyTheme(clientSettings.theme ?? "system"), [clientSettings.theme]);
 
   const applySnapshot = useCallback((snapshot: ClientSnapshot) => {
     setClientSnapshot(snapshot);
     setProviders(snapshot.providers);
-    setRules(snapshot.rules);
     setStatus({
       status: snapshot.runtime.phase,
       active: snapshot.runtime.active,
@@ -61,7 +81,6 @@ function App() {
       statePath: "",
       lockPath: "",
     });
-    setPort(snapshot.runtime.port ? String(snapshot.runtime.port) : String(DEFAULT_PORT));
   }, []);
 
   const currentProvider = useMemo(
@@ -70,10 +89,10 @@ function App() {
   );
 
   const routeLabel = useMemo(() => {
-    if (!status) return "Loading route";
-    if (status.externalModification) return "Protected";
-    if (status.active) return "Active";
-    return "Inactive";
+    if (!status) return "loadingRoute" as const;
+    if (status.externalModification) return "protected" as const;
+    if (status.active) return "active" as const;
+    return "inactive" as const;
   }, [status]);
 
   const refresh = useCallback(async (): Promise<boolean> => {
@@ -99,6 +118,12 @@ function App() {
       else unsubscriptions.push(cancel);
     };
     void clientFacade.getDiagnostics(20).then(setDiagnostics).catch(() => undefined);
+    void desktopApi.getClientSettings()
+      .then((settings) => {
+        setClientSettings(settings);
+        setPort(String(settings.port));
+      })
+      .catch((cause) => setError(displayError(cause)));
     void clientFacade.subscribe((snapshot) => {
       applySnapshot(snapshot);
     }).then(keepSubscription).catch(() => undefined);
@@ -111,6 +136,12 @@ function App() {
       unsubscriptions.forEach((unsubscribe) => unsubscribe());
     };
   }, [applySnapshot, refresh]);
+
+  useEffect(() => {
+    const providerId = clientSnapshot?.provider?.id;
+    if (!providerId) return;
+    setSettingsProviderId((current) => current || providerId);
+  }, [clientSnapshot]);
 
   const runBusyAction = async <Result,>(action: () => Promise<Result>): Promise<Result> => {
     setBusy(true);
@@ -142,10 +173,6 @@ function App() {
     }
   };
 
-  const saveRule = async (request: UpsertRouteRuleRequest): Promise<void> => {
-    await runBusyAction(() => desktopApi.upsertRouteRule(request));
-  };
-
   const importProviders = (request: ImportCcSwitchRequest): Promise<ImportReport> =>
     runBusyAction(() => desktopApi.importCcSwitchProviders(request));
 
@@ -159,32 +186,6 @@ function App() {
         return;
       }
       const snapshot = await clientFacade.setWorkspaceProvider(workspace, providerId);
-      applySnapshot(snapshot);
-    } catch (cause) {
-      setError(displayError(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const startRuntime = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const snapshot = await clientFacade.startRuntime();
-      applySnapshot(snapshot);
-    } catch (cause) {
-      setError(displayError(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const stopRuntime = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const snapshot = await clientFacade.stopRuntime();
       applySnapshot(snapshot);
     } catch (cause) {
       setError(displayError(cause));
@@ -207,12 +208,47 @@ function App() {
   };
 
   const activate = async () => {
-    const numericPort = Number(port);
+    const numericPort = Number(clientSettings.port);
     if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
-      setError("Port must be an integer between 1 and 65535.");
+      setError(t("portValidation"));
       return;
     }
     await runAction(() => desktopApi.activateRoute(numericPort));
+  };
+
+  const saveSettings = async ({ providerId, port: nextPort, launchAtLogin = clientSettings.launchAtLogin ?? false, closeToTray = clientSettings.closeToTray ?? true, language = clientSettings.language ?? "system", theme = clientSettings.theme ?? "system" }: SettingsDraft) => {
+    try {
+      const savedProviderId = clientSnapshot?.provider?.id || currentProvider?.id || "";
+      let savedProvider: ProviderSummary | undefined;
+      const savedSettings = await runBusyAction(async () => {
+        if (providerId && providerId !== savedProviderId) {
+          savedProvider = await desktopApi.setCurrentProvider(providerId);
+        }
+        return desktopApi.setClientSettings({ ...clientSettings, port: nextPort, launchAtLogin, closeToTray, language, theme });
+      });
+      setClientSettings(savedSettings);
+      setPort(String(savedSettings.port));
+      if (savedProvider) {
+        const nextProviders = providers.map((provider) => ({
+          ...provider,
+          isCurrent: provider.id === savedProvider?.id,
+        }));
+        setProviders(nextProviders);
+        setClientSnapshot((snapshot) => snapshot && ({
+          ...snapshot,
+          provider: savedProvider,
+          providers: nextProviders,
+        }));
+      }
+      setSettingsProviderId(providerId || savedProviderId);
+    } catch (cause) {
+      setError(displayError(cause));
+    }
+  };
+
+  const selectCurrentProvider = async (providerId: string) => {
+    const succeeded = await runAction(() => desktopApi.setCurrentProvider(providerId));
+    if (succeeded) setSettingsProviderId(providerId);
   };
 
   const toggleRoute = () => {
@@ -228,7 +264,6 @@ function App() {
   const changeView = (view: ActiveView) => {
     setActiveView(view);
     if (view !== "providers") setImportOpen(false);
-    if (view !== "dashboard") setWorkspaceRulesOpen(false);
     setMobileNavOpen(false);
   };
 
@@ -248,56 +283,69 @@ function App() {
         : "loading";
 
   return (
-    <div className={`apple-app${mobileNavOpen ? " mobile-nav-open" : ""}`}>
-      <header className="global-nav" aria-label="Codex Route navigation">
+    <I18nProvider translator={t}>
+    <div
+      className={`apple-app${mobileNavOpen ? " mobile-nav-open" : ""}`}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <header className="global-nav" aria-label={t("navigation")}>
         <div className="global-nav-inner">
-          <button
-            className="brand-button"
-            type="button"
-            aria-label="Codex Route home"
-            onClick={() => changeView("dashboard")}
-          >
-            <img className="brand-logo" src="/codex-route-logo.png" alt="" aria-hidden="true" />
-          </button>
+          <div className="global-nav-brand">
+            <button
+              className="brand-button"
+              type="button"
+              aria-label={t("home")}
+              onClick={() => changeView("dashboard")}
+            >
+              <img className="brand-logo" src="/codex-route-logo.png" alt="" aria-hidden="true" />
+            </button>
+          </div>
 
-          <nav id="global-nav-links" className="global-nav-links" aria-label="Workspace view" role="tablist">
+          <nav id="global-nav-links" className="global-nav-links" aria-label={t("workspaceView")} role="tablist">
             <button
               className={`nav-link${activeView === "dashboard" ? " active" : ""}`}
               type="button"
               role="tab"
               aria-selected={activeView === "dashboard"}
+              aria-label={t("overview")}
               onClick={() => changeView("dashboard")}
             >
               <LayoutDashboard size={14} aria-hidden="true" />
-              Overview
+              <span className="nav-link-label">{t("overview")}</span>
+              {(clientSnapshot?.workspaces.length ?? 0) > 0 && (
+                <span className="nav-count" aria-hidden="true">{clientSnapshot?.workspaces.length}</span>
+              )}
             </button>
             <button
               className={`nav-link${activeView === "providers" ? " active" : ""}`}
               type="button"
               role="tab"
               aria-selected={activeView === "providers"}
+              aria-label={t("providers")}
               onClick={() => changeView("providers")}
             >
               <Server size={14} aria-hidden="true" />
-              Providers
+              <span className="nav-link-label">{t("providers")}</span>
+              {providers.length > 0 && <span className="nav-count" aria-hidden="true">{providers.length}</span>}
             </button>
             <button
               className={`nav-link${activeView === "settings" ? " active" : ""}`}
               type="button"
               role="tab"
               aria-selected={activeView === "settings"}
+              aria-label={t("settings")}
               onClick={() => changeView("settings")}
             >
               <Settings size={14} aria-hidden="true" />
-              Settings
+              <span className="nav-link-label">{t("settings")}</span>
             </button>
           </nav>
 
           <div className="global-nav-actions">
-            <div className="global-route-control" aria-label="Route status">
+            <div className="global-route-control" aria-label={t("routeStatus")}>
               <span className={`route-context${statusModifier}`} role="status" aria-live="polite">
                 <Activity size={14} aria-hidden="true" />
-                <span>{routeLabel}</span>
+                <span>{t(routeLabel)}</span>
               </span>
               <button
                 className={`route-toggle${status?.active ? " active" : ""}`}
@@ -305,7 +353,7 @@ function App() {
                 role="switch"
                 aria-checked={status?.active === true}
                 data-route-state={routeState}
-                aria-label={status?.active ? "Deactivate route" : "Activate route"}
+                aria-label={status?.active ? t("deactivateRoute") : t("activateRoute")}
                 onClick={toggleRoute}
                 disabled={
                   busy ||
@@ -315,24 +363,24 @@ function App() {
                 }
               >
                 <span className="route-toggle-track" aria-hidden="true"><span /></span>
-                <span className="route-toggle-label">Route</span>
+                <span className="route-toggle-label">{t("route")}</span>
               </button>
             </div>
             <button
               className="button-dark-utility nav-refresh"
               type="button"
-              aria-label="Refresh"
-              title="Refresh"
+              aria-label={t("refresh")}
+              title={t("refresh")}
               onClick={() => void refreshManually()}
               disabled={busy}
             >
               <RefreshCw className={busy ? "spin" : undefined} size={15} aria-hidden="true" />
-              <span>Refresh</span>
+              <span>{t("refresh")}</span>
             </button>
             <button
               className="mobile-nav-toggle"
               type="button"
-              aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+              aria-label={mobileNavOpen ? t("closeNavigation") : t("openNavigation")}
               aria-expanded={mobileNavOpen}
               aria-controls="global-nav-links"
               onClick={() => setMobileNavOpen((open) => !open)}
@@ -346,42 +394,20 @@ function App() {
       <main className="app-content">
         {activeView === "dashboard" && !clientSnapshot && loading && (
           <section className="client-dashboard client-dashboard-loading" aria-busy="true" aria-labelledby="dashboard-loading-heading">
-            <h2 id="dashboard-loading-heading">Loading workspace…</h2>
+            <h2 id="dashboard-loading-heading">{t("loadingWorkspace")}</h2>
           </section>
         )}
         {clientSnapshot && activeView === "dashboard" && (
           <DashboardPage
             snapshot={clientSnapshot}
             onProviderChange={(workspace, providerId) => void changeWorkspaceProvider(workspace, providerId)}
-            onStartRuntime={() => void startRuntime()}
-            onStopRuntime={() => void stopRuntime()}
-            onOpenDiagnostics={() => setDiagnosticsOpen(true)}
-            workspaceRulesOpen={workspaceRulesOpen}
-            onToggleWorkspaceRules={() => setWorkspaceRulesOpen((open) => !open)}
           />
-        )}
-        {clientSnapshot && (
-            <WorkspaceRulesPanel
-              providers={providers}
-              rules={rules}
-              busy={busy}
-              onSave={saveRule}
-              onRemove={(workspace) => runAction(() => desktopApi.removeRouteRule(workspace))}
-              onError={setError}
-              open={workspaceRulesOpen}
-              onOpenChange={setWorkspaceRulesOpen}
-            />
         )}
         {clientSnapshot && activeView === "dashboard" && diagnosticsOpen && (
           <DiagnosticsPanel
             records={diagnostics}
             onClose={() => setDiagnosticsOpen(false)}
             onOpenProviders={() => { setDiagnosticsOpen(false); changeView("providers"); }}
-            onOpenWorkspaceRules={() => {
-              setDiagnosticsOpen(false);
-              changeView("dashboard");
-              setWorkspaceRulesOpen(true);
-            }}
             onOpenRuntime={() => { setDiagnosticsOpen(false); changeView("providers"); }}
             onClear={() => void clearDiagnostics()}
           />
@@ -390,19 +416,19 @@ function App() {
           <div className="error-banner" role="alert">
             <span>{error}</span>
             <button className="button-secondary-pill" type="button" onClick={() => void refreshManually()} disabled={busy}>
-              Retry
+              {t("retry")}
             </button>
           </div>
         )}
 
         {activeView !== "dashboard" && <div className="workspace-content">
           {activeView === "providers" ? (
-            <section className="workspace-panel-region utility-section" aria-labelledby="providers-heading">
+            <section className="workspace-panel-region utility-section">
               <ProviderPanel
                 providers={providers}
                 busy={busy}
                 loading={loading}
-                onSelect={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
+                onSelect={(providerId) => void selectCurrentProvider(providerId)}
                 onScan={desktopApi.scanCcSwitchProviders}
                 onImport={importProviders}
                 importOpen={importOpen}
@@ -410,18 +436,24 @@ function App() {
               />
             </section>
           ) : (
-            <section className="workspace-panel-region utility-section" aria-labelledby="settings-heading">
+            <section className="workspace-panel-region utility-section">
               <SettingsPanel
                 providers={providers}
-                defaultProviderId={clientSnapshot?.provider?.id}
+                settings={clientSettings}
+                t={t}
+                defaultProviderId={settingsProviderId || clientSnapshot?.provider?.id}
+                port={port}
                 busy={busy}
-                onDefaultProviderChange={(providerId) => void runAction(() => desktopApi.setCurrentProvider(providerId))}
+                onDefaultProviderChange={setSettingsProviderId}
+                onPortChange={setPort}
+                onSave={saveSettings}
               />
             </section>
           )}
         </div>}
       </main>
     </div>
+    </I18nProvider>
   );
 }
 

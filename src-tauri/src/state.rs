@@ -1,7 +1,7 @@
 use codex_route::config::ScanConfig;
 use codex_route::lifecycle::{EmbeddedRouteService, LifecyclePaths};
 use codex_route::provider_store::ProviderStore;
-use serde::{Deserialize, Serialize};
+use serde::{de::Deserializer, Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +25,75 @@ pub struct AppState {
 pub struct ClientSettings {
     pub auto_start: bool,
     pub startup_consent_granted: bool,
+    #[serde(default = "default_route_port")]
+    pub port: u16,
+    #[serde(default = "default_launch_at_login")]
+    pub launch_at_login: bool,
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
+    #[serde(default, deserialize_with = "deserialize_language_preference")]
+    pub language: LanguagePreference,
+    #[serde(default, deserialize_with = "deserialize_theme_preference")]
+    pub theme: ThemePreference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum LanguagePreference {
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "zh-TW")]
+    ZhTw,
+    #[serde(rename = "en")]
+    En,
+}
+
+impl Default for LanguagePreference {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ThemePreference {
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "light")]
+    Light,
+    #[serde(rename = "dark")]
+    Dark,
+}
+
+impl Default for ThemePreference {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+fn deserialize_language_preference<'de, D>(deserializer: D) -> Result<LanguagePreference, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        "zh-CN" => LanguagePreference::ZhCn,
+        "zh-TW" => LanguagePreference::ZhTw,
+        "en" => LanguagePreference::En,
+        _ => LanguagePreference::System,
+    })
+}
+
+fn deserialize_theme_preference<'de, D>(deserializer: D) -> Result<ThemePreference, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        "light" => ThemePreference::Light,
+        "dark" => ThemePreference::Dark,
+        _ => ThemePreference::System,
+    })
 }
 
 impl Default for ClientSettings {
@@ -32,8 +101,25 @@ impl Default for ClientSettings {
         Self {
             auto_start: true,
             startup_consent_granted: false,
+            port: default_route_port(),
+            launch_at_login: default_launch_at_login(),
+            close_to_tray: default_close_to_tray(),
+            language: LanguagePreference::default(),
+            theme: ThemePreference::default(),
         }
     }
+}
+
+fn default_launch_at_login() -> bool {
+    false
+}
+
+fn default_close_to_tray() -> bool {
+    true
+}
+
+fn default_route_port() -> u16 {
+    codex_route::route::DEFAULT_ROUTE_PORT
 }
 
 impl AppState {
@@ -70,6 +156,9 @@ impl AppState {
         &self,
         settings: ClientSettings,
     ) -> Result<ClientSettings, String> {
+        if settings.port == 0 {
+            return Err("port must be between 1 and 65535".to_string());
+        }
         let previous = self.settings.read().await.clone();
         let contents = serde_json::to_vec_pretty(&settings).map_err(|error| error.to_string())?;
         let path = self.data_dir.join("client-settings.json");
@@ -84,7 +173,7 @@ impl AppState {
                 .map_err(|error| error.to_string())?;
         } else if !previous.auto_start && crate::coordinator::should_auto_start(&settings) {
             self.runtime
-                .ensure_running(None, None)
+                .ensure_running(None, Some(settings.port))
                 .await
                 .map_err(|error| error.to_string())?;
             self.runtime.start_health_monitor().await;
@@ -143,4 +232,31 @@ fn default_data_dir() -> Result<PathBuf, String> {
         .or_else(dirs::home_dir)
         .map(|path| path.join("codex-route"))
         .ok_or_else(|| "cannot determine a configuration directory".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClientSettings, LanguagePreference, ThemePreference};
+
+    #[test]
+    fn legacy_settings_get_new_defaults() {
+        let settings: ClientSettings = serde_json::from_str(
+            r#"{"autoStart":true,"startupConsentGranted":false,"port":16729}"#,
+        )
+        .unwrap();
+        assert!(!settings.launch_at_login);
+        assert!(settings.close_to_tray);
+        assert_eq!(settings.language, LanguagePreference::System);
+        assert_eq!(settings.theme, ThemePreference::System);
+    }
+
+    #[test]
+    fn invalid_preferences_fall_back_to_system() {
+        let settings: ClientSettings = serde_json::from_str(
+            r#"{"autoStart":true,"startupConsentGranted":false,"port":16729,"language":"xx","theme":"neon"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.language, LanguagePreference::System);
+        assert_eq!(settings.theme, ThemePreference::System);
+    }
 }

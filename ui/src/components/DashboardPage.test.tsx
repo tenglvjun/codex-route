@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientSnapshot } from "../api";
 import { DashboardPage } from "./DashboardPage";
@@ -20,7 +20,7 @@ const snapshot: ClientSnapshot = {
     path: "/tmp/project",
     exists: true,
     sessionId: "session-1",
-    sessionIds: ["session-1"],
+    sessionIds: ["session-1", "session-2", "session-3", "session-4"],
     threadIds: ["thread-1"],
     providerId: "provider-a",
     conflictingWorkspaces: false,
@@ -49,20 +49,53 @@ const snapshot: ClientSnapshot = {
 describe("DashboardPage", () => {
   afterEach(cleanup);
 
-  it("shows every workspace route and runtime together", () => {
+  it("shows every workspace route without duplicating runtime controls", () => {
     render(
       <DashboardPage
         snapshot={snapshot}
         onProviderChange={vi.fn()}
-        onStopRuntime={vi.fn()}
-        workspaceRulesOpen={false}
-        onToggleWorkspaceRules={vi.fn()}
       />,
     );
-    expect(screen.getByRole("heading", { name: "Workspace routes" })).toBeTruthy();
-    expect((screen.getByLabelText("Route for /tmp/project") as HTMLSelectElement).value).toBe("provider-a");
-    expect(screen.getByText("Ready")).toBeTruthy();
-    expect(screen.getByText("127.0.0.1:16729")).toBeTruthy();
+    const overview = screen.getByRole("region", { name: "Workspace routes" });
+    expect(overview.classList.contains("utility-section")).toBe(true);
+    expect(overview.querySelector(".panel.overview-panel")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workspaces", level: 1 })).toBeTruthy();
+    expect(screen.getByText("Manage and configure your routing workspaces.")).toBeTruthy();
+    expect(screen.getByLabelText("1 active workspace").textContent).toBe("1");
+    expect(overview.querySelector(".workspace-route-toolbar")).toBeNull();
+    expect(overview.querySelector(".panel-heading")).toBeNull();
+    expect(screen.queryByText("OVERVIEW")).toBeNull();
+    expect(screen.queryByText("WORKSPACE")).toBeNull();
+    expect(screen.queryByText("PROVIDER ROUTE")).toBeNull();
+    expect(screen.getByRole("button", { name: "Select provider route for /tmp/project" }).textContent).toContain("Provider A");
+    expect(overview.querySelector(".workspace-route-title")?.textContent).toBe("project (4)");
+    expect(screen.getByText("/tmp/project", { selector: ".workspace-route-path" })).toBeTruthy();
+    expect(screen.getByLabelText("4 sessions")).toBeTruthy();
+    expect(overview.querySelectorAll(".workspace-route-row")).toHaveLength(1);
+    expect(overview.querySelector(".workspace-route-row")?.getAttribute("role")).toBe("listitem");
+    expect(screen.queryByLabelText("1 thread")).toBeNull();
+    expect(overview.querySelector(".workspace-route-metric")).toBeNull();
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.queryByText("127.0.0.1:16729")).toBeNull();
+  });
+
+  it("uses the themed provider menu to change a workspace route", () => {
+    const onProviderChange = vi.fn();
+    render(
+      <DashboardPage
+        snapshot={snapshot}
+        onProviderChange={onProviderChange}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Select provider route for /tmp/project" });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Provider B" }));
+
+    expect(onProviderChange).toHaveBeenCalledWith("/tmp/project", "provider-b");
+    expect(trigger.textContent).toContain("Provider B");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("exposes a default fallback for unconfigured workspaces", () => {
@@ -85,32 +118,14 @@ describe("DashboardPage", () => {
       <DashboardPage
         snapshot={multiWorkspaceSnapshot}
         onProviderChange={onProviderChange}
-        workspaceRulesOpen={false}
-        onToggleWorkspaceRules={vi.fn()}
       />,
     );
 
-    const route = screen.getByLabelText("Route for /tmp/other-project") as HTMLSelectElement;
-    expect(route.value).toBe("");
-    expect(route.options[0].textContent).toContain("Provider A");
-    fireEvent.change(route, { target: { value: "provider-b" } });
+    const route = screen.getByRole("button", { name: "Select provider route for /tmp/other-project" });
+    expect(route.textContent).toContain("Use default");
+    fireEvent.click(route);
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Provider B" }));
     expect(onProviderChange).toHaveBeenCalledWith("/tmp/other-project", "provider-b");
   });
 
-  it("exposes the route settings disclosure", () => {
-    const onToggleWorkspaceRules = vi.fn();
-    render(
-      <DashboardPage
-        snapshot={snapshot}
-        workspaceRulesOpen={false}
-        onToggleWorkspaceRules={onToggleWorkspaceRules}
-      />,
-    );
-
-    const toggle = screen.getByRole("button", { name: "Configure routes" });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.getAttribute("aria-controls")).toBe("workspace-rules-dialog");
-    fireEvent.click(toggle);
-    expect(onToggleWorkspaceRules).toHaveBeenCalledOnce();
-  });
 });

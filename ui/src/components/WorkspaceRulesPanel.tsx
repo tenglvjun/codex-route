@@ -102,8 +102,10 @@ export function WorkspaceRulesPanel({
   }, [errors.form]);
 
   useEffect(() => {
-    if (formOpen) document.getElementById("workspace-rule-provider")?.focus();
-  }, [formOpen]);
+    if (!formOpen) return;
+    const fieldId = editingWorkspace ? "workspace-rule-provider" : "workspace-rule-workspace";
+    document.getElementById(fieldId)?.focus();
+  }, [editingWorkspace, formOpen]);
 
   const openCreateForm = () => {
     setWorkspace("");
@@ -207,15 +209,17 @@ export function WorkspaceRulesPanel({
             <span className="count">{rules.length}</span>
           </div>
           <div className="panel-heading-actions">
-            <button
-              className="button-primary panel-add-button"
-              type="button"
-              onClick={openCreateForm}
-              disabled={busy || providers.length === 0}
-            >
-              <Plus size={16} aria-hidden="true" />
-              Add rule
-            </button>
+            {!formOpen && (
+              <button
+                className="button-primary panel-add-button"
+                type="button"
+                onClick={openCreateForm}
+                disabled={busy || providers.length === 0}
+              >
+                <Plus size={16} aria-hidden="true" />
+                Add rule
+              </button>
+            )}
             <button
               className="icon-button workspace-rules-dialog-close"
               type="button"
@@ -272,32 +276,34 @@ export function WorkspaceRulesPanel({
                   <p className="field-error" id="workspace-rule-workspace-error">{errors.workspace}</p>
                 )}
               </div>
-              <div className="field">
-                <label htmlFor="workspace-rule-provider">Provider</label>
-                <select
-                  id="workspace-rule-provider"
-                  value={selectedProviderId}
-                  onChange={(event) => {
-                    setProviderId(event.target.value);
-                    setErrors((current) => ({ ...current, provider: undefined, form: undefined }));
-                  }}
-                  aria-describedby={errors.provider ? "workspace-rule-provider-error" : undefined}
-                  aria-invalid={errors.provider ? "true" : undefined}
-                  disabled={busy || providers.length === 0}
-                >
-                  <option value="">Choose provider</option>
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>{provider.name}</option>
-                  ))}
-                </select>
-                {errors.provider && (
-                  <p className="field-error" id="workspace-rule-provider-error">{errors.provider}</p>
-                )}
+              <div className="form-control-row">
+                <div className="field">
+                  <label htmlFor="workspace-rule-provider">Provider</label>
+                  <select
+                    id="workspace-rule-provider"
+                    value={selectedProviderId}
+                    onChange={(event) => {
+                      setProviderId(event.target.value);
+                      setErrors((current) => ({ ...current, provider: undefined, form: undefined }));
+                    }}
+                    aria-describedby={errors.provider ? "workspace-rule-provider-error" : undefined}
+                    aria-invalid={errors.provider ? "true" : undefined}
+                    disabled={busy || providers.length === 0}
+                  >
+                    <option value="">Choose provider</option>
+                    {providers.map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.name}</option>
+                    ))}
+                  </select>
+                  {errors.provider && (
+                    <p className="field-error" id="workspace-rule-provider-error">{errors.provider}</p>
+                  )}
+                </div>
+                <button className="button primary form-submit" type="submit" disabled={busy || providers.length === 0}>
+                  <Check size={15} aria-hidden="true" />
+                  Save
+                </button>
               </div>
-              <button className="button primary form-submit" type="submit" disabled={busy || providers.length === 0}>
-                <Check size={15} aria-hidden="true" />
-                Save
-              </button>
             </div>
             {errors.form && (
               <p className="form-error" ref={formErrorRef} role="alert" tabIndex={-1}>
@@ -306,15 +312,15 @@ export function WorkspaceRulesPanel({
             )}
           </form>}
 
-          {rules.length === 0 ? (
+          {rules.length === 0 ? (!formOpen && (
             <div className="empty-state rules-empty-state" role="status">
-              <FolderTree size={30} aria-hidden="true" />
+              <span className="empty-state-icon" aria-hidden="true"><FolderTree size={22} /></span>
               <div>
                 <strong>No workspace rules</strong>
                 {providers.length === 0 && <p className="muted">Add a provider first.</p>}
               </div>
             </div>
-          ) : (
+          )) : (
             <div className="rules-list">
               {rules.map((rule) => (
                 <div className="rule-row rule-item" key={rule.workspace}>

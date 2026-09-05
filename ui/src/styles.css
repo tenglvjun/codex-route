@@ -183,14 +183,15 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
 .count { display: inline-flex; min-width: 36px; min-height: 32px; align-items: center; justify-content: center; border-radius: 11px; padding: 8px 12px; color: var(--ink-muted-80); background: var(--surface-pearl); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .provider-import-dialog { width: min(calc(100% - 32px), 720px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
 .provider-import-dialog::backdrop { background: rgb(0 0 0 / 48%); }
-.workspace-rules-dialog { width: min(calc(100% - 32px), 760px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
+.workspace-rules-dialog { width: min(calc(100% - 32px), 820px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
 .workspace-rules-dialog::backdrop { background: rgb(0 0 0 / 48%); }
 .workspace-rules-dialog-shell { display: grid; max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr); }
-.workspace-rules-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--hairline); padding: 20px 24px; }
+.workspace-rules-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--hairline); padding: 24px 28px; }
 .workspace-rules-dialog-header .panel-heading-title { flex: 1 1 auto; }
 .workspace-rules-dialog-header .panel-heading-actions { flex: 0 0 auto; }
+.workspace-rules-dialog-header h2 { font-size: 28px; line-height: 1.2; }
 .workspace-rules-dialog-close { margin: -6px -6px -6px 0; }
-.workspace-rules-dialog-body { min-height: 220px; overflow-y: auto; overscroll-behavior: contain; }
+.workspace-rules-dialog-body { min-height: 320px; overflow-y: auto; overscroll-behavior: contain; padding: 4px 0 0; }
 .import-dialog-shell { display: grid; max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr) auto; }
 .import-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--hairline); padding: 24px; }
 .import-dialog-header .eyebrow { margin-bottom: 8px; }
@@ -227,7 +228,9 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
 .provider-list, .rules-list { display: grid; gap: 0; padding: 0 24px 24px; }
 .provider-list > :first-child, .rules-list > :first-child { border-top: 0; }
 .provider-item, .provider-row, .rule-item, .rule-row { display: flex; min-width: 0; min-height: 72px; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--hairline); border-left: 3px solid transparent; border-radius: 0; padding: 16px 0; background: var(--canvas); transition: background 180ms ease, border-color 180ms ease, transform 180ms ease; }
-.provider-item:hover, .rule-item:hover { border-color: transparent; background: var(--surface-pearl); transform: translateY(-1px); }
+.rule-item, .rule-row { border-left: 0; }
+.provider-item:hover { border-color: transparent; background: var(--surface-pearl); transform: translateY(-1px); }
+.rule-item:hover { background: var(--surface-pearl); transform: translateY(-1px); }
 .provider-item.current { border-left-color: var(--primary); background: var(--surface-pearl); }
 .provider-summary { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .provider-summary > div { min-width: 0; }
@@ -247,13 +250,14 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
 .icon-button.danger { color: var(--ink-muted-80); }
 .panel-close-button { width: 44px; height: 44px; }
 
-.rule-form { margin: 0; border-bottom: 1px solid var(--hairline); padding: 20px 24px; background: var(--canvas); }
+.rule-form { display: grid; gap: 20px; margin: 20px 24px 24px; border: 1px solid var(--hairline); border-radius: 18px; padding: 24px; background: var(--canvas-parchment); }
 .rules-form-surface { box-shadow: none; }
-.form-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.form-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .form-heading strong { color: var(--ink); font-size: 17px; font-weight: 600; letter-spacing: -0.374px; line-height: 1.24; }
 .text-button { display: inline-flex; min-height: 40px; align-items: center; gap: 5px; border: 0; padding: 0; color: var(--primary); background: transparent; font-size: 14px; font-weight: 400; letter-spacing: -0.224px; line-height: 1.43; }
 .text-button:hover:not(:disabled) { text-decoration: underline; }
-.form-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.8fr) auto; align-items: end; gap: 16px; }
+.form-grid { display: grid; gap: 20px; }
+.form-control-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 16px; }
 .input-action { display: flex; align-items: stretch; gap: 8px; }
 .input-action input { min-width: 0; flex: 1; }
 .form-submit { min-width: 124px; }
@@ -273,6 +277,10 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
 .empty-state-icon { display: inline-flex; width: 40px; height: 40px; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 11px; color: var(--primary); background: var(--canvas-parchment); }
 .empty-state strong { display: block; margin-bottom: 0; color: var(--ink); font-size: 17px; font-weight: 600; letter-spacing: -0.374px; line-height: 1.24; }
 .empty-state p { max-width: 540px; margin: 4px 0 0; color: var(--ink-muted-48); font-size: 14px; letter-spacing: -0.224px; line-height: 1.43; }
+.rules-empty-state { min-height: 240px; flex-direction: column; justify-content: center; margin-top: 16px; border: 1px solid var(--hairline); border-radius: 18px; padding: 32px 24px; background: var(--surface-pearl); text-align: center; }
+.rules-empty-state .empty-state-icon { width: 48px; height: 48px; border-radius: 50%; }
+.rules-empty-state strong { font-size: 21px; }
+.rules-empty-state p { margin-top: 8px; }
 .empty-action { min-height: 40px; padding: 8px 15px; font-size: 14px; letter-spacing: -0.224px; line-height: 1.29; }
 .provider-skeleton-list { padding-top: 0; }
 .provider-skeleton { display: flex; min-height: 72px; align-items: center; gap: 12px; border-top: 1px solid var(--hairline); padding: 16px 0; }
@@ -293,8 +301,7 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .nav-link { min-height: 44px; justify-content: flex-start; font-size: 14px; letter-spacing: -0.224px; }
   .mobile-nav-toggle { display: inline-flex; }
   .nav-refresh span { display: none; }
-  .form-grid { grid-template-columns: 1fr 1fr; }
-  .form-submit { grid-column: 1 / -1; justify-self: start; }
+  .form-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   .global-nav-inner { width: min(100% - 24px, 1440px); }
@@ -327,7 +334,7 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .rule-actions { width: auto; margin-left: 0; }
   .rule-actions .icon-button { flex: 0 0 44px; }
   .rule-form { padding: 20px; }
-  .form-grid { grid-template-columns: 1fr; }
+  .form-control-row { grid-template-columns: 1fr; }
   .form-submit { width: 100%; }
   .error-banner { width: calc(100% - 40px); align-items: flex-start; flex-direction: column; gap: 12px; }
   .client-dashboard { width: calc(100% - 24px); padding: 32px 20px 48px; }
@@ -362,6 +369,7 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .import-dialog-actions { flex-direction: column-reverse; }
   .import-dialog-actions .button, .import-dialog-actions .button-primary { width: 100%; flex: none; }
   .rule-form { padding: 16px; }
+  .rules-empty-state { margin-inline: 16px; }
   .empty-state { margin-inline: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {

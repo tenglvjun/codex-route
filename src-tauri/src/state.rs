@@ -37,9 +37,10 @@ pub struct ClientSettings {
     pub theme: ThemePreference,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub enum LanguagePreference {
     #[serde(rename = "system")]
+    #[default]
     System,
     #[serde(rename = "zh-CN")]
     ZhCn,
@@ -49,26 +50,15 @@ pub enum LanguagePreference {
     En,
 }
 
-impl Default for LanguagePreference {
-    fn default() -> Self {
-        Self::System
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub enum ThemePreference {
     #[serde(rename = "system")]
+    #[default]
     System,
     #[serde(rename = "light")]
     Light,
     #[serde(rename = "dark")]
     Dark,
-}
-
-impl Default for ThemePreference {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 fn deserialize_language_preference<'de, D>(deserializer: D) -> Result<LanguagePreference, D::Error>

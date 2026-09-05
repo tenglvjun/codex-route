@@ -1,7 +1,7 @@
 use crate::client_snapshot::ClientSnapshot;
 use crate::diagnostics::DiagnosticSeverity;
-use crate::logging;
 use crate::locale::{resolve_language, system_locale, ResolvedLocale};
+use crate::logging;
 use crate::state::LanguagePreference;
 use std::collections::BTreeMap;
 #[cfg(target_os = "macos")]
@@ -74,7 +74,8 @@ fn show_window_label(locale: ResolvedLocale) -> String {
         ResolvedLocale::ZhCn => "显示 Codex Route",
         ResolvedLocale::ZhTw => "顯示 Codex Route",
         ResolvedLocale::En => "Show Codex Route",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn route_unavailable_label(locale: ResolvedLocale) -> String {
@@ -82,7 +83,8 @@ fn route_unavailable_label(locale: ResolvedLocale) -> String {
         ResolvedLocale::ZhCn => "Route 不可用",
         ResolvedLocale::ZhTw => "Route 無法使用",
         ResolvedLocale::En => "Route unavailable",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn start_route_label(locale: ResolvedLocale) -> String {
@@ -90,7 +92,8 @@ fn start_route_label(locale: ResolvedLocale) -> String {
         ResolvedLocale::ZhCn => "启动 Route",
         ResolvedLocale::ZhTw => "啟動 Route",
         ResolvedLocale::En => "Start Route",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn stop_route_label(locale: ResolvedLocale) -> String {
@@ -98,7 +101,8 @@ fn stop_route_label(locale: ResolvedLocale) -> String {
         ResolvedLocale::ZhCn => "停止 Route",
         ResolvedLocale::ZhTw => "停止 Route",
         ResolvedLocale::En => "Stop Route",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn provider_none_label(locale: ResolvedLocale) -> String {
@@ -106,7 +110,8 @@ fn provider_none_label(locale: ResolvedLocale) -> String {
         ResolvedLocale::ZhCn => "提供商：无",
         ResolvedLocale::ZhTw => "提供商：無",
         ResolvedLocale::En => "Provider: none",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn provider_label(locale: ResolvedLocale, name: &str) -> String {
@@ -122,7 +127,8 @@ fn quit_label(locale: ResolvedLocale) -> String {
         ResolvedLocale::ZhCn => "退出 Codex Route",
         ResolvedLocale::ZhTw => "結束 Codex Route",
         ResolvedLocale::En => "Quit Codex Route",
-    }.to_string()
+    }
+    .to_string()
 }
 
 #[cfg(target_os = "macos")]
@@ -137,7 +143,13 @@ pub fn build_menu<R: Runtime>(
 ) -> tauri::Result<Menu<R>> {
     let language = app
         .try_state::<crate::state::AppState>()
-        .and_then(|state| state.settings.try_read().ok().map(|settings| settings.language))
+        .and_then(|state| {
+            state
+                .settings
+                .try_read()
+                .ok()
+                .map(|settings| settings.language)
+        })
         .unwrap_or_default();
     let model = snapshot
         .map(|snapshot| TrayMenuModel::from_snapshot(snapshot, language))
@@ -345,13 +357,17 @@ mod tests {
     #[test]
     fn menu_labels_follow_explicit_locale() {
         let model = TrayMenuModel::from_snapshot(
-            &snapshot(RuntimePhase::Running, true, vec![ProviderSummary {
-                id: "a".into(),
-                name: "Provider A".into(),
-                category: None,
-                source: "local".into(),
-                is_current: true,
-            }]),
+            &snapshot(
+                RuntimePhase::Running,
+                true,
+                vec![ProviderSummary {
+                    id: "a".into(),
+                    name: "Provider A".into(),
+                    category: None,
+                    source: "local".into(),
+                    is_current: true,
+                }],
+            ),
             LanguagePreference::ZhCn,
         );
         assert_eq!(model.show_window, "显示 Codex Route");

@@ -1,5 +1,5 @@
-use crate::client_snapshot::{ClientSnapshot, DiagnosticsSummary};
 use crate::autostart::{sync_launch_at_login, TauriAutostartBackend};
+use crate::client_snapshot::{ClientSnapshot, DiagnosticsSummary};
 use crate::diagnostics::DiagnosticSeverity;
 use crate::logging;
 use crate::state::AppState;

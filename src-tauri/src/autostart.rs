@@ -4,10 +4,7 @@ pub trait AutostartBackend {
     fn set_enabled(&self, enabled: bool) -> Result<(), String>;
 }
 
-pub fn sync_launch_at_login<B: AutostartBackend>(
-    backend: &B,
-    enabled: bool,
-) -> Result<(), String> {
+pub fn sync_launch_at_login<B: AutostartBackend>(backend: &B, enabled: bool) -> Result<(), String> {
     backend.set_enabled(enabled)
 }
 
@@ -58,7 +55,10 @@ mod tests {
 
     #[test]
     fn forwards_enable_and_disable_once() {
-        let backend = FakeBackend { calls: RefCell::new(Vec::new()), error: None };
+        let backend = FakeBackend {
+            calls: RefCell::new(Vec::new()),
+            error: None,
+        };
         sync_launch_at_login(&backend, true).unwrap();
         sync_launch_at_login(&backend, false).unwrap();
         assert_eq!(*backend.calls.borrow(), vec![true, false]);
@@ -70,7 +70,10 @@ mod tests {
             calls: RefCell::new(Vec::new()),
             error: Some("login item denied".to_string()),
         };
-        assert_eq!(sync_launch_at_login(&backend, true), Err("login item denied".to_string()));
+        assert_eq!(
+            sync_launch_at_login(&backend, true),
+            Err("login item denied".to_string())
+        );
         assert_eq!(*backend.calls.borrow(), vec![true]);
     }
 }

@@ -1,10 +1,10 @@
-mod client_snapshot;
 mod autostart;
+mod client_snapshot;
 mod commands;
 mod coordinator;
 mod diagnostics;
-mod logging;
 mod locale;
+mod logging;
 mod runtime;
 mod state;
 mod tray;
@@ -23,7 +23,13 @@ fn should_hide_on_close(close_to_tray: bool) -> bool {
 fn close_to_tray_enabled<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
     app_handle
         .try_state::<AppState>()
-        .and_then(|state| state.settings.try_read().ok().map(|settings| settings.close_to_tray))
+        .and_then(|state| {
+            state
+                .settings
+                .try_read()
+                .ok()
+                .map(|settings| settings.close_to_tray)
+        })
         .unwrap_or(true)
 }
 
@@ -241,12 +247,12 @@ pub fn run() {
             label,
             event: WindowEvent::CloseRequested { api, .. },
             ..
-        } if label == MAIN_WINDOW_LABEL => {
-            if should_hide_on_close(close_to_tray_enabled(app_handle)) {
-                api.prevent_close();
-                if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
-                    let _ = window.hide();
-                }
+        } if label == MAIN_WINDOW_LABEL
+            && should_hide_on_close(close_to_tray_enabled(app_handle)) =>
+        {
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+                let _ = window.hide();
             }
         }
         RunEvent::ExitRequested { api, .. } => {

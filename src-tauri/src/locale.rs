@@ -7,7 +7,10 @@ pub enum ResolvedLocale {
     En,
 }
 
-pub fn resolve_language(preference: LanguagePreference, system_locale: Option<&str>) -> ResolvedLocale {
+pub fn resolve_language(
+    preference: LanguagePreference,
+    system_locale: Option<&str>,
+) -> ResolvedLocale {
     match preference {
         LanguagePreference::ZhCn => ResolvedLocale::ZhCn,
         LanguagePreference::ZhTw => ResolvedLocale::ZhTw,

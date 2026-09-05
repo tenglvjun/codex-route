@@ -1,4 +1,5 @@
 use crate::runtime::RuntimeSnapshot;
+use codex_route::codex_projects::load_saved_project_roots;
 use codex_route::config::ScanConfig;
 use codex_route::index::{SessionWorkspaceIndex, WorkspaceAggregate};
 use codex_route::provider::{Provider, ProviderSummary};
@@ -105,7 +106,10 @@ fn workspace_snapshots(
     rules: &[WorkspaceRouteRule],
     providers: &[Provider],
 ) -> Vec<WorkspaceSnapshot> {
-    let Ok(index) = SessionWorkspaceIndex::build_active(scan_config) else {
+    let project_roots = load_saved_project_roots(&scan_config.codex_home);
+    let Ok(index) =
+        SessionWorkspaceIndex::build_active_with_project_roots(scan_config, &project_roots)
+    else {
         return Vec::new();
     };
     index

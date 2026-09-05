@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::config::ScanConfig;
 use crate::rollout::{
     discover_active_rollouts, discover_rollouts, is_archived_path, read_session_meta, RolloutError,
-    RolloutSessionMeta,
+    RolloutSessionMeta, RolloutSource,
 };
 use crate::workspace_rule::normalize_workspace_path;
 
@@ -57,15 +57,28 @@ pub struct SessionWorkspaceIndex {
 impl SessionWorkspaceIndex {
     pub fn build(config: &ScanConfig) -> Result<Self, IndexError> {
         let paths = discover_rollouts(&config.codex_home)?;
+        Self::build_from_paths(config, paths, None)
+    }
+
+    fn build_from_paths(
+        config: &ScanConfig,
+        paths: Vec<PathBuf>,
+        project_roots: Option<&[PathBuf]>,
+    ) -> Result<Self, IndexError> {
         let mut sessions = BTreeMap::<String, Vec<RolloutSessionMeta>>::new();
 
         for path in paths {
             let archived = is_archived_path(&config.codex_home, &path);
             match read_session_meta(&path, archived, config.max_rollout_bytes) {
-                Ok(Some(meta)) => sessions
-                    .entry(meta.session_id.clone())
-                    .or_default()
-                    .push(meta),
+                Ok(Some(meta))
+                    if project_roots.is_none_or(|roots| is_displayable_workspace(&meta, roots)) =>
+                {
+                    sessions
+                        .entry(meta.session_id.clone())
+                        .or_default()
+                        .push(meta)
+                }
+                Ok(Some(_)) => {}
                 Ok(None) | Err(RolloutError::ScanLimitExceeded { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
@@ -77,18 +90,18 @@ impl SessionWorkspaceIndex {
     /// Returns an index built only from active Codex sessions.
     pub fn build_active(config: &ScanConfig) -> Result<Self, IndexError> {
         let paths = discover_active_rollouts(&config.codex_home)?;
-        let mut sessions = BTreeMap::<String, Vec<RolloutSessionMeta>>::new();
-        for path in paths {
-            match read_session_meta(&path, false, config.max_rollout_bytes) {
-                Ok(Some(meta)) => sessions
-                    .entry(meta.session_id.clone())
-                    .or_default()
-                    .push(meta),
-                Ok(None) | Err(RolloutError::ScanLimitExceeded { .. }) => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Ok(Self { sessions })
+        Self::build_from_paths(config, paths, None)
+    }
+
+    /// Returns an active-session index restricted to user-facing Codex
+    /// sessions. CLI sessions are retained; Desktop sessions are retained
+    /// only when their cwd belongs to a saved Desktop project root.
+    pub fn build_active_with_project_roots(
+        config: &ScanConfig,
+        project_roots: &[PathBuf],
+    ) -> Result<Self, IndexError> {
+        let paths = discover_active_rollouts(&config.codex_home)?;
+        Self::build_from_paths(config, paths, Some(project_roots))
     }
 
     /// Returns every unique session ID in stable lexical order.
@@ -292,6 +305,23 @@ fn normalize_workspace(path: &Path) -> PathBuf {
     normalize_workspace_path(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Decide whether a rollout should contribute to the user-visible workspace
+/// index. Path membership uses `Path::starts_with`, which compares path
+/// components and therefore does not confuse `/project-other` with `/project`.
+pub fn is_displayable_workspace(record: &RolloutSessionMeta, project_roots: &[PathBuf]) -> bool {
+    match &record.source {
+        RolloutSource::Cli | RolloutSource::Legacy => true,
+        RolloutSource::Vscode => {
+            let workspace = normalize_workspace(&record.workspace);
+            project_roots.iter().any(|root| {
+                let root = normalize_workspace(root);
+                workspace == root || workspace.starts_with(&root)
+            })
+        }
+        RolloutSource::Exec | RolloutSource::Other(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime};
@@ -314,6 +344,7 @@ mod tests {
             session_id: session_id.to_string(),
             thread_id: thread_id.to_string(),
             workspace: workspace.to_path_buf(),
+            source: RolloutSource::Legacy,
             timestamp: Some(timestamp.to_string()),
             rollout_path: fixture_path(&format!("{thread_id}.jsonl")),
             archived: false,

@@ -1,4 +1,5 @@
 pub mod cc_switch_import;
+pub mod codex_projects;
 pub mod codex_provider;
 pub mod config;
 pub mod index;

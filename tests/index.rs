@@ -14,20 +14,40 @@ fn write_rollout(
     cwd: &Path,
     timestamp: &str,
 ) {
+    write_rollout_with_source(
+        codex_home, directory, name, session_id, thread_id, cwd, timestamp, None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_rollout_with_source(
+    codex_home: &Path,
+    directory: &str,
+    name: &str,
+    session_id: &str,
+    thread_id: &str,
+    cwd: &Path,
+    timestamp: &str,
+    source: Option<serde_json::Value>,
+) {
     let directory = codex_home.join(directory).join("2026/09/02");
     fs::create_dir_all(&directory).expect("fixture directory should be created");
     let path = directory.join(name);
+    let mut payload = serde_json::json!({
+        "session_id": session_id,
+        "id": thread_id,
+        "timestamp": timestamp,
+        "cwd": cwd.to_string_lossy(),
+        "originator": "codex",
+        "cli_version": "test"
+    });
+    if let Some(source) = source {
+        payload["source"] = source;
+    }
     let line = serde_json::json!({
         "timestamp": timestamp,
         "type": "session_meta",
-        "payload": {
-            "session_id": session_id,
-            "id": thread_id,
-            "timestamp": timestamp,
-            "cwd": cwd.to_string_lossy(),
-            "originator": "codex",
-            "cli_version": "test"
-        }
+        "payload": payload
     });
     fs::write(path, format!("{line}\n")).expect("fixture should be written");
 }
@@ -157,4 +177,100 @@ fn active_index_excludes_archived_session_ids() {
     let index = SessionWorkspaceIndex::build_active(&config).expect("index should build");
     assert!(index.session_ids().is_empty());
     assert!(index.workspaces().is_empty());
+}
+
+#[test]
+fn active_index_keeps_cli_and_saved_desktop_projects_only() {
+    let home = TempDir::new().expect("temporary home should be created");
+    let project = home.path().join("project");
+    let child = project.join("nested");
+    let project_other = home.path().join("project-other");
+    let scratch = home.path().join("Documents/Codex/2026-09-04/qingn");
+
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-cli.jsonl",
+        "CLI",
+        "T1",
+        &home.path().join("cli-workspace"),
+        "2026-01-01T00:00:00Z",
+        Some(serde_json::json!("cli")),
+    );
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-desktop-root.jsonl",
+        "DESKTOP_ROOT",
+        "T2",
+        &project,
+        "2026-01-02T00:00:00Z",
+        Some(serde_json::json!("vscode")),
+    );
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-desktop-child.jsonl",
+        "DESKTOP_CHILD",
+        "T3",
+        &child,
+        "2026-01-03T00:00:00Z",
+        Some(serde_json::json!("vscode")),
+    );
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-desktop-boundary.jsonl",
+        "DESKTOP_BOUNDARY",
+        "T4",
+        &project_other,
+        "2026-01-04T00:00:00Z",
+        Some(serde_json::json!("vscode")),
+    );
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-desktop-scratch.jsonl",
+        "DESKTOP_SCRATCH",
+        "T5",
+        &scratch,
+        "2026-01-05T00:00:00Z",
+        Some(serde_json::json!("vscode")),
+    );
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-exec.jsonl",
+        "EXEC",
+        "T6",
+        &project,
+        "2026-01-06T00:00:00Z",
+        Some(serde_json::json!("exec")),
+    );
+    write_rollout_with_source(
+        home.path(),
+        "sessions",
+        "rollout-subagent.jsonl",
+        "SUBAGENT",
+        "T7",
+        &project,
+        "2026-01-07T00:00:00Z",
+        Some(serde_json::json!({"subagent": {"thread_spawn": {}}})),
+    );
+
+    let config = ScanConfig {
+        codex_home: home.path().to_path_buf(),
+        max_rollout_bytes: 64 * 1024,
+    };
+    let index = SessionWorkspaceIndex::build_active_with_project_roots(&config, &[project])
+        .expect("index should build");
+
+    assert_eq!(
+        index.session_ids(),
+        vec![
+            "CLI".to_string(),
+            "DESKTOP_CHILD".to_string(),
+            "DESKTOP_ROOT".to_string(),
+        ]
+    );
 }

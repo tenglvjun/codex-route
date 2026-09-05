@@ -18,10 +18,25 @@ pub struct RolloutSessionMeta {
     pub session_id: String,
     pub thread_id: String,
     pub workspace: PathBuf,
+    pub source: RolloutSource,
     pub timestamp: Option<String>,
     pub rollout_path: PathBuf,
     pub archived: bool,
     pub(crate) modified_at: Option<SystemTime>,
+}
+
+/// The Codex session source recorded in a rollout's `session_meta` payload.
+///
+/// `Legacy` represents older rollouts that predate the source field. It is
+/// intentionally distinct from `Other`, so compatibility does not make an
+/// explicitly unknown or internal source visible in the workspace index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RolloutSource {
+    Legacy,
+    Cli,
+    Vscode,
+    Exec,
+    Other(String),
 }
 
 #[derive(Debug, Error)]
@@ -191,16 +206,61 @@ fn parse_session_meta_line(
         .and_then(Value::as_str)
         .or_else(|| object.get("timestamp").and_then(Value::as_str))
         .map(ToOwned::to_owned);
+    let source = parse_rollout_source(
+        payload.get("source"),
+        payload.get("originator").and_then(Value::as_str),
+    );
 
     Some(RolloutSessionMeta {
         session_id,
         thread_id,
         workspace,
+        source,
         timestamp,
         rollout_path: path.to_path_buf(),
         archived,
         modified_at,
     })
+}
+
+fn parse_rollout_source(value: Option<&Value>, originator: Option<&str>) -> RolloutSource {
+    let Some(value) = value else {
+        if let Some(originator) = originator {
+            let originator = originator.trim().to_ascii_lowercase();
+            if originator == "codex desktop" {
+                return RolloutSource::Vscode;
+            }
+            if matches!(
+                originator.as_str(),
+                "codex_exec" | "codex exec" | "codex-exec"
+            ) {
+                return RolloutSource::Exec;
+            }
+            if originator.starts_with("mcp")
+                || originator.starts_with("internal")
+                || originator.starts_with("subagent")
+            {
+                return RolloutSource::Other(originator);
+            }
+        }
+        return RolloutSource::Legacy;
+    };
+
+    let Some(source) = value.as_str() else {
+        let kind = value
+            .as_object()
+            .and_then(|object| object.keys().next())
+            .cloned()
+            .unwrap_or_else(|| "non-string".to_string());
+        return RolloutSource::Other(kind);
+    };
+
+    match source.trim().to_ascii_lowercase().as_str() {
+        "cli" => RolloutSource::Cli,
+        "vscode" => RolloutSource::Vscode,
+        "exec" => RolloutSource::Exec,
+        other => RolloutSource::Other(other.to_string()),
+    }
 }
 
 fn non_empty_string(value: &Value) -> Option<String> {
@@ -264,7 +324,96 @@ mod tests {
         assert_eq!(result.session_id, "session-1");
         assert_eq!(result.thread_id, "thread-1");
         assert_eq!(result.workspace, workspace);
+        assert_eq!(result.source, RolloutSource::Legacy);
         assert!(!result.archived);
+    }
+
+    #[test]
+    fn recognizes_legacy_desktop_metadata_without_source() {
+        let workspace = fixture_path("legacy-desktop");
+        let rollout = fixture_path("rollout.jsonl");
+        let mut value: Value =
+            serde_json::from_slice(&metadata_line("session-1", "thread-1", &workspace))
+                .expect("fixture should be valid JSON");
+        value["payload"]["originator"] = Value::String("Codex Desktop".to_string());
+        let line = serde_json::to_vec(&value).expect("fixture should serialize");
+
+        let result = read_session_meta_from_reader(
+            Box::new(Cursor::new(line)),
+            &rollout,
+            false,
+            64 * 1024,
+            None,
+        )
+        .expect("fixture should parse")
+        .expect("metadata should be present");
+
+        assert_eq!(result.source, RolloutSource::Vscode);
+    }
+
+    #[test]
+    fn rejects_known_background_originators_without_source() {
+        let workspace = fixture_path("legacy-background");
+        let rollout = fixture_path("rollout.jsonl");
+
+        for (originator, expected) in [
+            ("codex_exec", RolloutSource::Exec),
+            ("mcp", RolloutSource::Other("mcp".to_string())),
+            (
+                "subagent:thread_spawn",
+                RolloutSource::Other("subagent:thread_spawn".to_string()),
+            ),
+        ] {
+            let mut value: Value =
+                serde_json::from_slice(&metadata_line("session-1", "thread-1", &workspace))
+                    .expect("fixture should be valid JSON");
+            value["payload"]["originator"] = Value::String(originator.to_string());
+            let line = serde_json::to_vec(&value).expect("fixture should serialize");
+            let result = read_session_meta_from_reader(
+                Box::new(Cursor::new(line)),
+                &rollout,
+                false,
+                64 * 1024,
+                None,
+            )
+            .expect("fixture should parse")
+            .expect("metadata should be present");
+
+            assert_eq!(result.source, expected);
+        }
+    }
+
+    #[test]
+    fn parses_known_sources_and_structured_subagents() {
+        let workspace = fixture_path("project");
+        let rollout = fixture_path("rollout.jsonl");
+
+        for (source, expected) in [
+            (serde_json::json!("cli"), RolloutSource::Cli),
+            (serde_json::json!("vscode"), RolloutSource::Vscode),
+            (serde_json::json!("exec"), RolloutSource::Exec),
+            (
+                serde_json::json!({"subagent": {"thread_spawn": {}}}),
+                RolloutSource::Other("subagent".to_string()),
+            ),
+        ] {
+            let mut value: Value =
+                serde_json::from_slice(&metadata_line("session-1", "thread-1", &workspace))
+                    .expect("fixture should be valid JSON");
+            value["payload"]["source"] = source;
+            let line = serde_json::to_vec(&value).expect("fixture should serialize");
+            let result = read_session_meta_from_reader(
+                Box::new(Cursor::new(line)),
+                &rollout,
+                false,
+                64 * 1024,
+                None,
+            )
+            .expect("fixture should parse")
+            .expect("metadata should be present");
+
+            assert_eq!(result.source, expected);
+        }
     }
 
     #[test]

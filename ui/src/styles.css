@@ -85,6 +85,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 .client-dashboard { width: min(100% - 40px, 980px); margin: 0 auto; padding: 48px 24px 64px; background: var(--canvas); }
 .dashboard-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--hairline); padding-bottom: 24px; }
 .dashboard-heading h2 { max-width: 700px; margin-bottom: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 28px; line-height: 1.2; }
+.dashboard-heading-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 12px; }
+.dashboard-heading-actions .button-secondary-pill { min-height: 40px; padding: 8px 15px; font-size: 14px; letter-spacing: -0.224px; line-height: 1.29; white-space: nowrap; }
 .client-dashboard-loading { min-height: 220px; }
 .dashboard-lead { margin: 8px 0 0; color: var(--ink-muted-48); font-size: 14px; }
 .dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 40px; }
@@ -318,6 +320,8 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .error-banner { width: calc(100% - 40px); align-items: flex-start; flex-direction: column; gap: 12px; }
   .client-dashboard { width: calc(100% - 24px); padding: 32px 20px 48px; }
   .dashboard-heading { flex-direction: column; }
+  .dashboard-heading-actions { width: 100%; justify-content: stretch; }
+  .dashboard-heading-actions .button-secondary-pill { width: 100%; }
   .dashboard-grid { grid-template-columns: 1fr; }
   .workspace-route-row { grid-template-columns: 28px minmax(0, 1fr); align-items: start; }
   .workspace-route-select { grid-column: 2; }

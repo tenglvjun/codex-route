@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  FolderTree,
   LayoutDashboard,
   Menu,
   RefreshCw,
@@ -28,7 +27,7 @@ import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 
 const DEFAULT_PORT = 16729;
-type ActiveView = "dashboard" | "providers" | "rules" | "settings";
+type ActiveView = "dashboard" | "providers" | "settings";
 
 function App() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -40,6 +39,7 @@ function App() {
   const [port, setPort] = useState(String(DEFAULT_PORT));
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [importOpen, setImportOpen] = useState(false);
+  const [workspaceRulesOpen, setWorkspaceRulesOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [clientSnapshot, setClientSnapshot] = useState<ClientSnapshot | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticRecord[]>([]);
@@ -228,6 +228,7 @@ function App() {
   const changeView = (view: ActiveView) => {
     setActiveView(view);
     if (view !== "providers") setImportOpen(false);
+    if (view !== "dashboard") setWorkspaceRulesOpen(false);
     setMobileNavOpen(false);
   };
 
@@ -279,16 +280,6 @@ function App() {
             >
               <Server size={14} aria-hidden="true" />
               Providers
-            </button>
-            <button
-              className={`nav-link${activeView === "rules" ? " active" : ""}`}
-              type="button"
-              role="tab"
-              aria-selected={activeView === "rules"}
-              onClick={() => changeView("rules")}
-            >
-              <FolderTree size={14} aria-hidden="true" />
-              Workspace rules
             </button>
             <button
               className={`nav-link${activeView === "settings" ? " active" : ""}`}
@@ -365,14 +356,36 @@ function App() {
             onStartRuntime={() => void startRuntime()}
             onStopRuntime={() => void stopRuntime()}
             onOpenDiagnostics={() => setDiagnosticsOpen(true)}
+            workspaceRulesOpen={workspaceRulesOpen}
+            onToggleWorkspaceRules={() => setWorkspaceRulesOpen((open) => !open)}
           />
+        )}
+        {clientSnapshot && activeView === "dashboard" && workspaceRulesOpen && (
+          <section
+            className="workspace-panel-region utility-section dashboard-rules-region"
+            aria-labelledby="rules-heading"
+            id="workspace-rules-panel"
+          >
+            <WorkspaceRulesPanel
+              providers={providers}
+              rules={rules}
+              busy={busy}
+              onSave={saveRule}
+              onRemove={(workspace) => runAction(() => desktopApi.removeRouteRule(workspace))}
+              onError={setError}
+            />
+          </section>
         )}
         {clientSnapshot && activeView === "dashboard" && diagnosticsOpen && (
           <DiagnosticsPanel
             records={diagnostics}
             onClose={() => setDiagnosticsOpen(false)}
             onOpenProviders={() => { setDiagnosticsOpen(false); changeView("providers"); }}
-            onOpenWorkspaceRules={() => { setDiagnosticsOpen(false); changeView("rules"); }}
+            onOpenWorkspaceRules={() => {
+              setDiagnosticsOpen(false);
+              changeView("dashboard");
+              setWorkspaceRulesOpen(true);
+            }}
             onOpenRuntime={() => { setDiagnosticsOpen(false); changeView("providers"); }}
             onClear={() => void clearDiagnostics()}
           />
@@ -398,17 +411,6 @@ function App() {
                 onImport={importProviders}
                 importOpen={importOpen}
                 onImportOpenChange={setImportOpen}
-              />
-            </section>
-          ) : activeView === "rules" ? (
-            <section className="workspace-panel-region utility-section" aria-labelledby="rules-heading">
-              <WorkspaceRulesPanel
-                providers={providers}
-                rules={rules}
-                busy={busy}
-                onSave={saveRule}
-                onRemove={(workspace) => runAction(() => desktopApi.removeRouteRule(workspace))}
-                onError={setError}
               />
             </section>
           ) : (

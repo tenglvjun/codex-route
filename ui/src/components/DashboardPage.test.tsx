@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientSnapshot } from "../api";
 import { DashboardPage } from "./DashboardPage";
 
@@ -47,8 +47,18 @@ const snapshot: ClientSnapshot = {
 };
 
 describe("DashboardPage", () => {
+  afterEach(cleanup);
+
   it("shows every workspace route and runtime together", () => {
-    render(<DashboardPage snapshot={snapshot} onProviderChange={vi.fn()} onStopRuntime={vi.fn()} />);
+    render(
+      <DashboardPage
+        snapshot={snapshot}
+        onProviderChange={vi.fn()}
+        onStopRuntime={vi.fn()}
+        workspaceRulesOpen={false}
+        onToggleWorkspaceRules={vi.fn()}
+      />,
+    );
     expect(screen.getByRole("heading", { name: "Workspace routes" })).toBeTruthy();
     expect((screen.getByLabelText("Route for /tmp/project") as HTMLSelectElement).value).toBe("provider-a");
     expect(screen.getByText("Ready")).toBeTruthy();
@@ -71,12 +81,36 @@ describe("DashboardPage", () => {
         },
       ],
     };
-    render(<DashboardPage snapshot={multiWorkspaceSnapshot} onProviderChange={onProviderChange} />);
+    render(
+      <DashboardPage
+        snapshot={multiWorkspaceSnapshot}
+        onProviderChange={onProviderChange}
+        workspaceRulesOpen={false}
+        onToggleWorkspaceRules={vi.fn()}
+      />,
+    );
 
     const route = screen.getByLabelText("Route for /tmp/other-project") as HTMLSelectElement;
     expect(route.value).toBe("");
     expect(route.options[0].textContent).toContain("Provider A");
     fireEvent.change(route, { target: { value: "provider-b" } });
     expect(onProviderChange).toHaveBeenCalledWith("/tmp/other-project", "provider-b");
+  });
+
+  it("exposes the route settings disclosure", () => {
+    const onToggleWorkspaceRules = vi.fn();
+    render(
+      <DashboardPage
+        snapshot={snapshot}
+        workspaceRulesOpen={false}
+        onToggleWorkspaceRules={onToggleWorkspaceRules}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Configure routes" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe("workspace-rules-panel");
+    fireEvent.click(toggle);
+    expect(onToggleWorkspaceRules).toHaveBeenCalledOnce();
   });
 });

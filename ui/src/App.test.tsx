@@ -112,8 +112,13 @@ describe("App", () => {
     expect(document.querySelectorAll("img.brand-logo")).toHaveLength(1);
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("false");
-    expect(screen.getByRole("tab", { name: "Workspace rules" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByRole("tab", { name: "Workspace rules" })).toBeNull();
     expect(await screen.findByRole("heading", { name: "Workspace routes" })).toBeTruthy();
+    const routeSettings = screen.getByRole("button", { name: "Configure routes" });
+    expect(routeSettings.getAttribute("aria-expanded")).toBe("false");
+    await user.click(routeSettings);
+    expect(await screen.findByRole("heading", { name: "Workspace rules" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide route settings" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Providers" }));
     expect(await screen.findByRole("heading", { name: "Providers", level: 2 })).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Activate route" }).getAttribute("data-route-state")).toBe(

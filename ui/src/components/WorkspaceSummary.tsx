@@ -28,6 +28,10 @@ export function WorkspaceSummary({
 
   return (
     <div className="workspace-route-list" aria-label="Workspace routes">
+      <div className="workspace-route-list-header" aria-hidden="true">
+        <span>Active workspaces</span>
+        <span>Provider route</span>
+      </div>
       {workspaces.map((workspace) => {
         const selectedProviderId = workspace.providerId || "";
         return (
@@ -36,7 +40,7 @@ export function WorkspaceSummary({
               {workspace.conflictingWorkspaces ? <GitBranch size={18} /> : <FolderOpen size={18} />}
             </div>
             <div className="workspace-route-copy">
-              <strong>{workspace.path}</strong>
+              <strong title={workspace.path}>{workspace.path}</strong>
               <span>
                 {workspace.sessionIds.length} session{workspace.sessionIds.length === 1 ? "" : "s"} · {workspace.threadIds.length} thread{workspace.threadIds.length === 1 ? "" : "s"}
                 {!workspace.exists ? " · folder unavailable" : ""}

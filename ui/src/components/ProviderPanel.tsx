@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileInput, LoaderCircle, Power, RefreshCw, Server, X } from "lucide-react";
+import { Check, FileInput, LoaderCircle, RefreshCw, Server, X } from "lucide-react";
 import type {
   CcSwitchScanReport,
   ConflictPolicy,
@@ -8,6 +8,8 @@ import type {
   ProviderSummary,
 } from "../api";
 import { displayError } from "../errors";
+import { useTranslation } from "../i18n";
+import { PreferenceSelect } from "./PreferenceSelect";
 
 type ProviderPanelProps = {
   providers: ProviderSummary[];
@@ -30,6 +32,7 @@ export function ProviderPanel({
   importOpen,
   onImportOpenChange,
 }: ProviderPanelProps) {
+  const t = useTranslation();
   const [internalImportOpen, setInternalImportOpen] = useState(false);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("skip");
   const [scanning, setScanning] = useState(false);
@@ -147,26 +150,26 @@ export function ProviderPanel({
   };
 
   return (
-    <section className="panel" aria-labelledby="providers-heading">
-      <div className="panel-heading">
-        <div className="panel-heading-title">
-          <h2 id="providers-heading">Providers</h2>
-          <span className="count">{providers.length}</span>
+    <section className="panel provider-panel" aria-label={t("providers")}>
+      <header className="provider-heading">
+        <div>
+          <h1>{t("providers")}</h1>
+          <p>{t("providersPageDescription")}</p>
         </div>
         <button
-          className="button secondary provider-import-trigger"
+          className="button-primary provider-import-trigger"
           type="button"
           onClick={() => setImportDialogOpen(true)}
           disabled={busy || importing}
           aria-haspopup="dialog"
           aria-expanded={importDialogOpen}
           aria-controls="cc-switch-import-dialog"
-          aria-label="Import providers from cc-switch"
+          aria-label={t("importProviders")}
         >
           <FileInput size={16} aria-hidden="true" />
-          Import
+          {t("import")}
         </button>
-      </div>
+      </header>
 
       <dialog
         className="provider-import-dialog"
@@ -182,14 +185,14 @@ export function ProviderPanel({
           <header className="import-dialog-header">
             <div>
               <p className="eyebrow">CC-SWITCH</p>
-              <h2 id="cc-switch-import-title">Import from cc-switch</h2>
+            <h2 id="cc-switch-import-title">{t("importFromCcSwitch")}</h2>
             </div>
             <button
               className="icon-button import-dialog-close"
               type="button"
               ref={closeButtonRef}
-              aria-label="Close import dialog"
-              title="Close"
+              aria-label={t("closeImport")}
+              title={t("close")}
               onClick={closeImportDialog}
               disabled={importing}
             >
@@ -201,18 +204,18 @@ export function ProviderPanel({
             {scanning && (
               <div className="import-scan-state" role="status" aria-live="polite">
                 <LoaderCircle className="spin" size={24} aria-hidden="true" />
-                <strong>Scanning cc-switch...</strong>
+                <strong>{t("scanningCcSwitch")}</strong>
               </div>
             )}
 
             {!scanning && dialogError && (
               <div className="import-dialog-error" role="alert">
-                <strong>Could not complete the import</strong>
+                <strong>{t("importFailed")}</strong>
                 <span>{dialogError}</span>
                 {!scanReport && (
-                  <button className="button secondary" type="button" onClick={() => void scanProviders()}>
+                    <button className="button secondary" type="button" onClick={() => void scanProviders()}>
                     <RefreshCw size={15} aria-hidden="true" />
-                    Retry scan
+                    {t("retryScan")}
                   </button>
                 )}
               </div>
@@ -228,18 +231,18 @@ export function ProviderPanel({
                       onChange={toggleAll}
                       disabled={scanReport.providers.length === 0 || importing}
                     />
-                    <span>Select all</span>
+                    <span>{t("selectAll")}</span>
                   </label>
-                  <span className="selection-count" aria-live="polite">{selectedProviderIds.length} selected</span>
+                  <span className="selection-count" aria-live="polite">{t("selectedCount", { count: selectedProviderIds.length })}</span>
                 </div>
 
                 {scanReport.providers.length === 0 ? (
                   <div className="import-empty-state" role="status">
                     <Server size={24} aria-hidden="true" />
-                    <strong>No importable Codex providers found</strong>
+                    <strong>{t("noImportableProviders")}</strong>
                   </div>
                 ) : (
-                  <div className="import-provider-list" aria-label="Available cc-switch providers">
+                  <div className="import-provider-list" aria-label={t("availableCcSwitchProviders")}>
                     {scanReport.providers.map((provider) => (
                       <label className="import-provider-option" key={provider.id}>
                         <input
@@ -253,7 +256,7 @@ export function ProviderPanel({
                           <strong>{provider.name}</strong>
                           <span>{provider.id}{provider.category ? ` · ${provider.category}` : ""}</span>
                         </span>
-                        {provider.alreadyImported && <span className="imported-badge">Already imported</span>}
+                        {provider.alreadyImported && <span className="imported-badge">{t("alreadyImported")}</span>}
                       </label>
                     ))}
                   </div>
@@ -261,7 +264,7 @@ export function ProviderPanel({
 
                 {scanReport.rejected.length > 0 && (
                   <details className="import-rejected">
-                    <summary>{scanReport.rejected.length} unavailable configuration{scanReport.rejected.length === 1 ? "" : "s"}</summary>
+                    <summary>{t(scanReport.rejected.length === 1 ? "unavailableConfigurations" : "unavailableConfigurationsPlural", { count: scanReport.rejected.length })}</summary>
                     <ul>
                       {scanReport.rejected.map((provider) => (
                         <li key={`${provider.id}-${provider.reason}`}>{provider.id}: {provider.reason}</li>
@@ -275,9 +278,9 @@ export function ProviderPanel({
             {importReport && (
               <div className="import-complete" role="status" aria-live="polite">
                 <span className="import-complete-icon" aria-hidden="true"><FileInput size={22} /></span>
-                <strong>Import complete</strong>
+                <strong>{t("importComplete")}</strong>
                 <span>
-                  Imported {importReport.imported} · Replaced {importReport.replaced} · Renamed {importReport.renamed} · Skipped {importReport.skipped} · Rejected {importReport.rejected.length}
+                  {t("importSummary", { imported: importReport.imported, replaced: importReport.replaced, renamed: importReport.renamed, skipped: importReport.skipped, rejected: importReport.rejected.length })}
                 </span>
               </div>
             )}
@@ -285,25 +288,26 @@ export function ProviderPanel({
 
           <footer className="import-dialog-footer">
             {importReport ? (
-              <button className="button-primary" type="button" onClick={closeImportDialog}>Done</button>
+              <button className="button-primary" type="button" onClick={closeImportDialog}>{t("done")}</button>
             ) : (
               <>
                 <label className="compact-field import-conflict-field" htmlFor="provider-conflict-policy">
-                  <span>On conflict</span>
-                  <select
-                    id="provider-conflict-policy"
+                  <span>{t("onConflict")}</span>
+                  <PreferenceSelect
                     value={conflictPolicy}
-                    onChange={(event) => setConflictPolicy(event.target.value as ConflictPolicy)}
+                    onChange={setConflictPolicy}
+                    ariaLabel={t("onConflict")}
                     disabled={scanning || importing || !scanReport}
-                  >
-                    <option value="skip">Skip existing</option>
-                    <option value="replace">Replace existing</option>
-                    <option value="rename">Import with new ID</option>
-                  </select>
+                    options={[
+                      { value: "skip", label: t("skipExisting") },
+                      { value: "replace", label: t("replaceExisting") },
+                      { value: "rename", label: t("importWithNewId") },
+                    ]}
+                  />
                 </label>
                 <div className="import-dialog-actions">
                   <button className="button secondary" type="button" onClick={closeImportDialog} disabled={importing}>
-                    Cancel
+                    {t("cancel")}
                   </button>
                   <button
                     className="button-primary"
@@ -312,7 +316,7 @@ export function ProviderPanel({
                     disabled={scanning || importing || selectedProviderIds.length === 0}
                   >
                     {importing ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <FileInput size={16} aria-hidden="true" />}
-                    {importing ? "Importing..." : `Import selected (${selectedProviderIds.length})`}
+                    {importing ? t("importing") : t("importSelected", { count: selectedProviderIds.length })}
                   </button>
                 </div>
               </>
@@ -322,7 +326,7 @@ export function ProviderPanel({
       </dialog>
 
       {loading ? (
-        <div className="provider-list provider-skeleton-list" role="status" aria-label="Loading providers">
+        <div className="provider-list provider-skeleton-list" role="status" aria-label={t("loadingProviders")}>
           {["skeleton-a", "skeleton-b", "skeleton-c"].map((id) => (
             <div className="provider-skeleton" key={id} aria-hidden="true">
               <span className="provider-skeleton-icon" />
@@ -335,38 +339,48 @@ export function ProviderPanel({
         <div className="empty-state provider-empty-state" role="status">
           <span className="empty-state-icon" aria-hidden="true"><Server size={20} /></span>
           <div>
-            <strong>No providers yet</strong>
-            <button className="button-primary empty-action" type="button" onClick={() => setImportDialogOpen(true)} disabled={busy || importing}>
-              <FileInput size={15} aria-hidden="true" />
-              Import
-            </button>
+            <strong>{t("noProviders")}</strong>
           </div>
         </div>
       ) : (
-        <div className="provider-list">
+        <div className="provider-list" role="list" aria-label={t("configuredProviders")}>
           {providers.map((provider) => (
-            <div
+            <article
               className={`provider-item provider-row${provider.isCurrent ? " current" : ""}`}
+              role="listitem"
               key={provider.id}
               data-provider-id={provider.id}
               data-provider-current={provider.isCurrent ? "true" : "false"}
             >
               <div className="provider-summary">
-                <span className={`provider-status-dot${provider.isCurrent ? " active" : ""}`} aria-hidden="true" />
-                <div>
+                <span className="provider-icon" aria-hidden="true">
+                  <Server size={22} />
+                  <span className={`provider-status-dot${provider.isCurrent ? " active" : ""}`} />
+                </span>
+                <div className="provider-copy">
                   <strong>{provider.name}</strong>
                   <span className="muted">{provider.source}</span>
                 </div>
               </div>
-              <button
-                className={provider.isCurrent ? "badge current current-state" : "button secondary"}
-                onClick={() => onSelect(provider.id)}
-                disabled={busy || provider.isCurrent}
-              >
-                {!provider.isCurrent && <Power size={15} aria-hidden="true" />}
-                {provider.isCurrent ? "Current" : "Use provider"}
-              </button>
-            </div>
+              {provider.isCurrent ? (
+                <button
+                  className="provider-current-state"
+                  type="button"
+                  disabled
+                >
+                  <Check size={15} aria-hidden="true" />
+                    {t("current")}
+                </button>
+              ) : (
+                <button
+                  className="button secondary provider-use-button"
+                  onClick={() => onSelect(provider.id)}
+                  disabled={busy}
+                >
+                  {t("useProvider")}
+                </button>
+              )}
+            </article>
           ))}
         </div>
       )}

@@ -72,7 +72,12 @@ impl<R: Runtime> ClientCoordinator<R> {
 
         let settings = self.state.settings.read().await.clone();
         if should_auto_start(&settings) {
-            if let Err(error) = self.state.runtime.ensure_running(None, None).await {
+            if let Err(error) = self
+                .state
+                .runtime
+                .ensure_running(None, Some(settings.port))
+                .await
+            {
                 let severity =
                     if matches!(error, crate::runtime::RuntimeError::ExternalModification) {
                         DiagnosticSeverity::Warning
@@ -131,10 +136,14 @@ mod tests {
         assert!(should_auto_start(&ClientSettings {
             auto_start: true,
             startup_consent_granted: true,
+            port: codex_route::route::DEFAULT_ROUTE_PORT,
+            ..ClientSettings::default()
         }));
         assert!(!should_auto_start(&ClientSettings {
             auto_start: false,
             startup_consent_granted: true,
+            port: codex_route::route::DEFAULT_ROUTE_PORT,
+            ..ClientSettings::default()
         }));
     }
 }

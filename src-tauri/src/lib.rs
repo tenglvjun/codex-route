@@ -1,7 +1,9 @@
+mod autostart;
 mod client_snapshot;
 mod commands;
 mod coordinator;
 mod diagnostics;
+mod locale;
 mod logging;
 mod runtime;
 mod state;
@@ -13,6 +15,23 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindow, WindowEvent};
 
 const MAIN_WINDOW_LABEL: &str = "main";
+
+fn should_hide_on_close(close_to_tray: bool) -> bool {
+    close_to_tray
+}
+
+fn close_to_tray_enabled<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
+    app_handle
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .settings
+                .try_read()
+                .ok()
+                .map(|settings| settings.close_to_tray)
+        })
+        .unwrap_or(true)
+}
 
 #[cfg(target_os = "macos")]
 fn hide_window_title<R: Runtime>(window: &WebviewWindow<R>) {
@@ -143,6 +162,7 @@ impl RuntimePhaseLabel for crate::runtime::RuntimePhase {
 
 pub fn run() {
     let state = AppState::initialize().expect("codex-route desktop state should initialize");
+    let launched_at_login = std::env::args().any(|argument| argument == "--autostart");
     let shutdown_started = Arc::new(AtomicBool::new(false));
     let shutdown_started_for_run = Arc::clone(&shutdown_started);
 
@@ -154,6 +174,12 @@ pub fn run() {
                 serde_json::json!({ "args": args, "cwd": cwd }),
             );
         }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--autostart"])
+                .app_name("Codex Route")
+                .build(),
+        )
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -168,8 +194,13 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
             let state = app.state::<AppState>().inner().clone();
+            if launched_at_login {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    let _ = window.hide();
+                }
+            }
             start_event_bridge(app.handle().clone(), state.clone());
             if let Err(error) = tray::install(app.handle()) {
                 log::error!(target: "desktop", "failed to install tray: {error}");
@@ -209,14 +240,16 @@ pub fn run() {
         .expect("error while building codex-route desktop application");
 
     app.run(move |app_handle, event| match event {
-        RunEvent::Ready => present_main_window(app_handle),
+        RunEvent::Ready if !launched_at_login => present_main_window(app_handle),
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => present_main_window(app_handle),
         RunEvent::WindowEvent {
             label,
             event: WindowEvent::CloseRequested { api, .. },
             ..
-        } if label == MAIN_WINDOW_LABEL => {
+        } if label == MAIN_WINDOW_LABEL
+            && should_hide_on_close(close_to_tray_enabled(app_handle)) =>
+        {
             api.prevent_close();
             if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
                 let _ = window.hide();
@@ -242,4 +275,15 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_hide_on_close;
+
+    #[test]
+    fn close_to_tray_preference_controls_window_hiding() {
+        assert!(should_hide_on_close(true));
+        assert!(!should_hide_on_close(false));
+    }
 }

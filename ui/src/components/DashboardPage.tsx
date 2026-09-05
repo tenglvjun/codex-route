@@ -1,42 +1,39 @@
 import type { ClientSnapshot } from "../api";
-import { RuntimeCard } from "./RuntimeCard";
 import { WorkspaceSummary } from "./WorkspaceSummary";
+import { useTranslation } from "../i18n";
 
 type DashboardPageProps = {
   snapshot: ClientSnapshot;
   onProviderChange?: (workspace: string, providerId: string) => void;
-  onStartRuntime?: () => void;
-  onStopRuntime?: () => void;
-  onOpenDiagnostics?: () => void;
 };
 
 export function DashboardPage({
   snapshot,
   onProviderChange,
-  onStartRuntime,
-  onStopRuntime,
-  onOpenDiagnostics,
 }: DashboardPageProps) {
+  const t = useTranslation();
+  const workspaceCount = snapshot.workspaces.length;
+  const workspaceCountLabel = t(workspaceCount === 1 ? "activeWorkspace" : "activeWorkspaces", { count: workspaceCount });
   return (
-    <section className="client-dashboard" aria-labelledby="dashboard-heading">
-      <div className="dashboard-heading">
-        <div>
-          <p className="eyebrow">OVERVIEW</p>
-          <h2 id="dashboard-heading">Workspace routes</h2>
-          <p className="dashboard-lead">
-            {snapshot.workspaces.length} active workspace{snapshot.workspaces.length === 1 ? "" : "s"} · new sessions use {snapshot.provider?.name || "the default route"}
-          </p>
+    <section className="client-dashboard workspace-panel-region utility-section" aria-label={t("workspaceRoutes")}>
+      <div className="panel overview-panel">
+        <header className="dashboard-heading">
+          <div>
+            <div className="dashboard-heading-title">
+              <h1>{t("workspaces")}</h1>
+              <span className="count dashboard-count" aria-label={workspaceCountLabel}>{workspaceCount}</span>
+            </div>
+            <p>{t("workspacesDescription")}</p>
+          </div>
+        </header>
+        <div className="dashboard-grid">
+          <WorkspaceSummary
+            workspaces={snapshot.workspaces}
+            providers={snapshot.providers}
+            defaultProvider={snapshot.provider}
+            onProviderChange={onProviderChange}
+          />
         </div>
-      </div>
-
-      <div className="dashboard-grid">
-        <WorkspaceSummary
-          workspaces={snapshot.workspaces}
-          providers={snapshot.providers}
-          defaultProvider={snapshot.provider}
-          onProviderChange={onProviderChange}
-        />
-        <RuntimeCard snapshot={snapshot} onStart={onStartRuntime} onStop={onStopRuntime} onOpenDiagnostics={onOpenDiagnostics} />
       </div>
     </section>
   );

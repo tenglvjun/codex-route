@@ -66,7 +66,15 @@ export type ClientSnapshot = {
 export type ClientSettings = {
   autoStart: boolean;
   startupConsentGranted: boolean;
+  port: number;
+  launchAtLogin: boolean;
+  closeToTray: boolean;
+  language: LanguagePreference;
+  theme: ThemePreference;
 };
+
+export type LanguagePreference = "system" | "zh-CN" | "zh-TW" | "en";
+export type ThemePreference = "system" | "light" | "dark";
 
 export type DiagnosticRecord = {
   id: number;

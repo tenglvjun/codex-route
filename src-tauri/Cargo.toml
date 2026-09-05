@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Codex Route desktop client"
 authors = ["tenglvjun"]
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.77.2"
 
 [lib]
 name = "codex_route_desktop_lib"
@@ -29,5 +29,7 @@ tokio = { version = "1", features = ["sync"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-log = "2"
+tauri-plugin-autostart = "2.5.1"
+sys-locale = "0.3.2"
 log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

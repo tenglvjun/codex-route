@@ -15,8 +15,15 @@ describe("DiagnosticsPanel", () => {
 
     expect(screen.getByText("route.failed")).toBeTruthy();
     expect(screen.getByText("route.ready")).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Filter diagnostics"), { target: { value: "error" } });
+    fireEvent.click(screen.getByRole("button", { name: "Filter diagnostics" }));
+    fireEvent.click(screen.getByRole("listbox").querySelector('[role="option"][aria-selected="false"]')!);
     expect(screen.getByText("route.failed")).toBeTruthy();
     expect(screen.queryByText("route.ready")).toBeNull();
+  });
+
+  it("does not expose a workspace-rules navigation action", () => {
+    render(<DiagnosticsPanel records={[{ id: 1, timestamp: 1, severity: "warning", code: "workspace.scan", message: "Workspace changed", source: "scanner", context: {} }]} />);
+
+    expect(screen.queryByRole("button", { name: "Open Workspace rules" })).toBeNull();
   });
 });

@@ -62,6 +62,15 @@ The command emits a stable, lexically sorted JSON array:
 ]
 ```
 
+The desktop workspace overview and request routing apply an additional source
+filter. Interactive CLI rollouts (`source: "cli"`) are retained. Desktop
+rollouts (`source: "vscode"`) are retained only when their `cwd` is equal to or
+inside a project root saved in Codex's `$CODEX_HOME/state_5.sqlite`; `exec`, MCP,
+internal, and subagent rollouts are excluded. If the project database cannot be
+read, Desktop rollouts are treated conservatively and are not shown. The
+standalone `resolve` and `list` commands continue to scan all rollout metadata
+so an individual historical session can still be inspected.
+
 Codex home resolution is:
 
 ```text

@@ -1,6 +1,8 @@
 use crate::client_snapshot::ClientSnapshot;
 use crate::diagnostics::DiagnosticSeverity;
+use crate::locale::{resolve_language, system_locale, ResolvedLocale};
 use crate::logging;
+use crate::state::LanguagePreference;
 use std::collections::BTreeMap;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
@@ -25,32 +27,34 @@ pub struct TrayMenuModel {
 }
 
 impl TrayMenuModel {
-    pub fn empty() -> Self {
+    pub fn empty(language: LanguagePreference) -> Self {
+        let locale = resolve_language(language, system_locale().as_deref());
         Self {
-            show_window: "Show Codex Route".to_string(),
-            route_status: "Route unavailable".to_string(),
+            show_window: show_window_label(locale),
+            route_status: route_unavailable_label(locale),
             route_enabled: false,
-            provider_status: "Provider: none".to_string(),
+            provider_status: provider_none_label(locale),
             provider_enabled: false,
-            quit: "Quit Codex Route".to_string(),
+            quit: quit_label(locale),
         }
     }
 
-    pub fn from_snapshot(snapshot: &ClientSnapshot) -> Self {
+    pub fn from_snapshot(snapshot: &ClientSnapshot, language: LanguagePreference) -> Self {
+        let locale = resolve_language(language, system_locale().as_deref());
         let route_status = if snapshot.runtime.active {
-            "Stop Route".to_string()
+            stop_route_label(locale)
         } else if snapshot.providers.is_empty() {
-            "Route unavailable".to_string()
+            route_unavailable_label(locale)
         } else {
-            "Start Route".to_string()
+            start_route_label(locale)
         };
         let provider_status = snapshot
             .provider
             .as_ref()
-            .map(|provider| format!("Provider: {}", provider.name))
-            .unwrap_or_else(|| "Provider: none".to_string());
+            .map(|provider| provider_label(locale, &provider.name))
+            .unwrap_or_else(|| provider_none_label(locale));
         Self {
-            show_window: "Show Codex Route".to_string(),
+            show_window: show_window_label(locale),
             route_enabled: !matches!(
                 snapshot.runtime.phase,
                 crate::runtime::RuntimePhase::BlockedExternalModification
@@ -60,9 +64,71 @@ impl TrayMenuModel {
             route_status,
             provider_enabled: snapshot.provider.is_some(),
             provider_status,
-            quit: "Quit Codex Route".to_string(),
+            quit: quit_label(locale),
         }
     }
+}
+
+fn show_window_label(locale: ResolvedLocale) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => "显示 Codex Route",
+        ResolvedLocale::ZhTw => "顯示 Codex Route",
+        ResolvedLocale::En => "Show Codex Route",
+    }
+    .to_string()
+}
+
+fn route_unavailable_label(locale: ResolvedLocale) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => "Route 不可用",
+        ResolvedLocale::ZhTw => "Route 無法使用",
+        ResolvedLocale::En => "Route unavailable",
+    }
+    .to_string()
+}
+
+fn start_route_label(locale: ResolvedLocale) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => "启动 Route",
+        ResolvedLocale::ZhTw => "啟動 Route",
+        ResolvedLocale::En => "Start Route",
+    }
+    .to_string()
+}
+
+fn stop_route_label(locale: ResolvedLocale) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => "停止 Route",
+        ResolvedLocale::ZhTw => "停止 Route",
+        ResolvedLocale::En => "Stop Route",
+    }
+    .to_string()
+}
+
+fn provider_none_label(locale: ResolvedLocale) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => "提供商：无",
+        ResolvedLocale::ZhTw => "提供商：無",
+        ResolvedLocale::En => "Provider: none",
+    }
+    .to_string()
+}
+
+fn provider_label(locale: ResolvedLocale, name: &str) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => format!("提供商：{name}"),
+        ResolvedLocale::ZhTw => format!("提供商：{name}"),
+        ResolvedLocale::En => format!("Provider: {name}"),
+    }
+}
+
+fn quit_label(locale: ResolvedLocale) -> String {
+    match locale {
+        ResolvedLocale::ZhCn => "退出 Codex Route",
+        ResolvedLocale::ZhTw => "結束 Codex Route",
+        ResolvedLocale::En => "Quit Codex Route",
+    }
+    .to_string()
 }
 
 #[cfg(target_os = "macos")]
@@ -75,9 +141,19 @@ pub fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: Option<&ClientSnapshot>,
 ) -> tauri::Result<Menu<R>> {
+    let language = app
+        .try_state::<crate::state::AppState>()
+        .and_then(|state| {
+            state
+                .settings
+                .try_read()
+                .ok()
+                .map(|settings| settings.language)
+        })
+        .unwrap_or_default();
     let model = snapshot
-        .map(TrayMenuModel::from_snapshot)
-        .unwrap_or_else(TrayMenuModel::empty);
+        .map(|snapshot| TrayMenuModel::from_snapshot(snapshot, language))
+        .unwrap_or_else(|| TrayMenuModel::empty(language));
     let show = MenuItem::with_id(app, SHOW_WINDOW_ID, model.show_window, true, None::<&str>)?;
     let route = MenuItem::with_id(
         app,
@@ -131,6 +207,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                         } else {
                             let mut settings = state.settings.read().await.clone();
                             settings.startup_consent_granted = true;
+                            let port = settings.port;
                             if let Err(error) = state.update_settings(settings).await {
                                 logging::record(
                                     &state,
@@ -144,7 +221,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                                 .await;
                                 return;
                             }
-                            if let Err(error) = state.runtime.ensure_running(None, None).await {
+                            if let Err(error) = state.runtime.ensure_running(None, Some(port)).await
+                            {
                                 logging::record(
                                     &state,
                                     DiagnosticSeverity::Error,
@@ -202,6 +280,7 @@ mod tests {
     use super::TrayMenuModel;
     use crate::client_snapshot::{ClientSnapshot, CodexStatus, DiagnosticsSummary};
     use crate::runtime::{RuntimePhase, RuntimeSnapshot};
+    use crate::state::LanguagePreference;
     use codex_route::provider::ProviderSummary;
     use std::path::PathBuf;
 
@@ -246,8 +325,10 @@ mod tests {
             source: "local".into(),
             is_current: true,
         };
-        let model =
-            TrayMenuModel::from_snapshot(&snapshot(RuntimePhase::Running, true, vec![provider]));
+        let model = TrayMenuModel::from_snapshot(
+            &snapshot(RuntimePhase::Running, true, vec![provider]),
+            LanguagePreference::En,
+        );
         assert_eq!(model.route_status, "Stop Route");
         assert_eq!(model.provider_status, "Provider: Provider A");
         assert!(model.route_enabled);
@@ -255,7 +336,7 @@ mod tests {
 
     #[test]
     fn empty_menu_has_safe_disabled_actions() {
-        let model = TrayMenuModel::empty();
+        let model = TrayMenuModel::empty(LanguagePreference::En);
         assert_eq!(model.route_status, "Route unavailable");
         assert_eq!(model.provider_status, "Provider: none");
         assert!(!model.route_enabled);
@@ -264,9 +345,34 @@ mod tests {
 
     #[test]
     fn degraded_without_provider_disables_route_action() {
-        let model = TrayMenuModel::from_snapshot(&snapshot(RuntimePhase::Degraded, false, vec![]));
+        let model = TrayMenuModel::from_snapshot(
+            &snapshot(RuntimePhase::Degraded, false, vec![]),
+            LanguagePreference::En,
+        );
         assert_eq!(model.route_status, "Route unavailable");
         assert!(!model.route_enabled);
         assert!(!model.provider_enabled);
+    }
+
+    #[test]
+    fn menu_labels_follow_explicit_locale() {
+        let model = TrayMenuModel::from_snapshot(
+            &snapshot(
+                RuntimePhase::Running,
+                true,
+                vec![ProviderSummary {
+                    id: "a".into(),
+                    name: "Provider A".into(),
+                    category: None,
+                    source: "local".into(),
+                    is_current: true,
+                }],
+            ),
+            LanguagePreference::ZhCn,
+        );
+        assert_eq!(model.show_window, "显示 Codex Route");
+        assert_eq!(model.route_status, "停止 Route");
+        assert_eq!(model.provider_status, "提供商：Provider A");
+        assert_eq!(model.quit, "退出 Codex Route");
     }
 }

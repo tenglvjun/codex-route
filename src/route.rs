@@ -24,7 +24,9 @@ use crate::codex_provider::{
 use crate::provider::{Provider, ProviderSummary};
 use crate::provider_store::{ProviderStore, ProviderStoreError};
 use crate::workspace_rule::normalize_workspace_path;
-use crate::{config::ScanConfig, index::SessionWorkspaceIndex};
+use crate::{
+    codex_projects::load_saved_project_roots, config::ScanConfig, index::SessionWorkspaceIndex,
+};
 
 pub const DEFAULT_ROUTE_PORT: u16 = 16_729;
 
@@ -265,7 +267,9 @@ impl RouteState {
     ) -> Option<PathBuf> {
         let session_id = extract_codex_session_id(headers, body?)?;
         let config = self.scan_config.as_ref()?;
-        let index = SessionWorkspaceIndex::build_active(config).ok()?;
+        let project_roots = load_saved_project_roots(&config.codex_home);
+        let index =
+            SessionWorkspaceIndex::build_active_with_project_roots(config, &project_roots).ok()?;
         let lookup = index.resolve(&session_id).ok()?;
         if lookup.conflicting_workspaces || !lookup.workspace_exists {
             return None;

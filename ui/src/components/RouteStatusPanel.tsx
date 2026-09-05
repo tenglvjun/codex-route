@@ -1,5 +1,6 @@
 import { Power, Square } from "lucide-react";
 import type { LifecycleStatus } from "../api";
+import { useTranslation } from "../i18n";
 
 type RouteStatusPanelProps = {
   status: LifecycleStatus | null;
@@ -20,6 +21,7 @@ export function RouteStatusPanel({
   onActivate,
   onDeactivate,
 }: RouteStatusPanelProps) {
+  const t = useTranslation();
   const routeState = status?.externalModification
     ? "external-modified"
     : status?.active
@@ -35,16 +37,16 @@ export function RouteStatusPanel({
         ? "inactive"
         : "loading";
   const statusLabel = status?.externalModification
-    ? "External modification"
+    ? t("externalModification")
     : status?.active
-      ? "Active"
+      ? t("active")
       : status
-        ? "Inactive"
-        : "Loading";
-  const listener = status?.port ? `127.0.0.1:${status.port}` : "No listener";
+        ? t("inactive")
+        : t("loadingRoute");
+  const listener = status?.port ? `127.0.0.1:${status.port}` : t("noListener");
   const routeUrl = status?.active && status.port
     ? `http://127.0.0.1:${status.port}/v1`
-    : "Unavailable";
+    : t("unavailable");
 
   return (
     <section
@@ -60,9 +62,9 @@ export function RouteStatusPanel({
             aria-hidden="true"
           />
           <div>
-            <p className="eyebrow">LOCAL ROUTE</p>
-            <h2 id="status-heading">Route status</h2>
-            <p className="muted">Local listener for Codex provider routing.</p>
+            <p className="eyebrow">{t("localRoute")}</p>
+            <h2 id="status-heading">{t("routeStatus")}</h2>
+            <p className="muted">{t("localListenerDescription")}</p>
           </div>
         </div>
 
@@ -77,26 +79,26 @@ export function RouteStatusPanel({
         </div>
       </div>
 
-      <div className="status-details route-strip-details" aria-label="Route details">
+      <div className="status-details route-strip-details" aria-label={t("routeStatus")}>
         <div className="status-detail">
-          <span className="muted">Listener</span>
+          <span className="muted">{t("listener")}</span>
           <strong className="status-value">{listener}</strong>
         </div>
         <div className="status-detail">
-          <span className="muted">Configuration</span>
+          <span className="muted">{t("configuration")}</span>
           <strong className="status-value">
-            {status?.configManaged ? "Managed by Codex Route" : "Not managed"}
+            {status?.configManaged ? t("managedByCodexRoute") : t("notManaged")}
           </strong>
         </div>
         <div className="status-detail">
-          <span className="muted">Route URL</span>
+          <span className="muted">{t("routeUrl")}</span>
           <code className="route-url">{routeUrl}</code>
         </div>
       </div>
 
       {status?.externalModification && (
         <p className="status-warning route-strip-warning" role="alert">
-          Codex config changed outside Codex Route. Deactivation is blocked to protect it.
+          {t("externalConfigWarning")}
         </p>
       )}
 
@@ -105,7 +107,7 @@ export function RouteStatusPanel({
         data-route-state={routeState}
       >
         <label className="compact-field route-port-field" htmlFor="route-port">
-          <span>Port</span>
+          <span>{t("port")}</span>
           <input
             id="route-port"
             type="number"
@@ -116,7 +118,7 @@ export function RouteStatusPanel({
             disabled={busy || status?.active === true}
           />
         </label>
-        <div className="actions route-switch" data-route-state={routeState} role="group" aria-label="Route controls">
+        <div className="actions route-switch" data-route-state={routeState} role="group" aria-label={t("routeControls")}>
           <button
             className="button primary route-switch-action route-switch-action--activate"
             type="button"
@@ -125,7 +127,7 @@ export function RouteStatusPanel({
             disabled={busy || status?.active === true || !canActivate}
           >
             <Power size={16} aria-hidden="true" />
-            Activate
+            {t("activate")}
           </button>
           <button
             className="button danger route-switch-action route-switch-action--deactivate"
@@ -135,7 +137,7 @@ export function RouteStatusPanel({
             disabled={busy || status?.active !== true}
           >
             <Square size={15} aria-hidden="true" />
-            Deactivate
+            {t("deactivate")}
           </button>
         </div>
       </div>

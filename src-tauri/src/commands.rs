@@ -1,3 +1,4 @@
+use crate::autostart::{sync_launch_at_login, TauriAutostartBackend};
 use crate::client_snapshot::{ClientSnapshot, DiagnosticsSummary};
 use crate::diagnostics::DiagnosticSeverity;
 use crate::logging;
@@ -105,20 +106,31 @@ pub async fn get_client_settings(state: State<'_, AppState>) -> Result<ClientSet
 
 #[tauri::command]
 pub async fn set_client_settings(
+    app: AppHandle,
     state: State<'_, AppState>,
     settings: ClientSettings,
 ) -> Result<ClientSettings, String> {
-    state.update_settings(settings).await
+    let previous = state.settings.read().await.clone();
+    if previous.launch_at_login != settings.launch_at_login {
+        let backend = TauriAutostartBackend::new(&app);
+        sync_launch_at_login(&backend, settings.launch_at_login)?;
+    }
+    let saved = state.update_settings(settings).await?;
+    if let Ok(snapshot) = build_client_snapshot(&state).await {
+        let _ = crate::tray::update_menu(&app, &snapshot);
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
 pub async fn start_runtime(state: State<'_, AppState>) -> Result<ClientSnapshot, String> {
     let mut settings = state.settings.read().await.clone();
     settings.startup_consent_granted = true;
+    let port = settings.port;
     state.update_settings(settings).await?;
     state
         .runtime
-        .ensure_running(None, None)
+        .ensure_running(None, Some(port))
         .await
         .map_err(|error| error.to_string())?;
     build_client_snapshot(&state).await

@@ -37,6 +37,7 @@
 html, body, #root { width: 100%; min-width: 0; height: auto; min-height: 100%; }
 html { background: var(--canvas-parchment); }
 body { margin: 0; overflow-x: hidden; overflow-y: auto; background: var(--canvas-parchment); color: var(--ink); font-family: "SF Pro Text", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 17px; line-height: 1.47; letter-spacing: -0.374px; }
+html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; overscroll-behavior: none; }
 button, input, select { font: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 2px; }
 button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
@@ -181,9 +182,9 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
 .panel-heading-actions { display: flex; align-items: center; gap: 12px; }
 .panel-add-button, .provider-import-trigger { min-height: 36px; padding: 8px 15px; font-size: 14px; letter-spacing: -0.224px; line-height: 1.29; }
 .count { display: inline-flex; min-width: 36px; min-height: 32px; align-items: center; justify-content: center; border-radius: 11px; padding: 8px 12px; color: var(--ink-muted-80); background: var(--surface-pearl); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0; }
-.provider-import-dialog { width: min(calc(100% - 32px), 720px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
+.provider-import-dialog { width: min(calc(100% - 32px), 720px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; overscroll-behavior: contain; }
 .provider-import-dialog::backdrop { background: rgb(0 0 0 / 48%); }
-.workspace-rules-dialog { width: min(calc(100% - 32px), 820px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
+.workspace-rules-dialog { width: min(calc(100% - 32px), 820px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; overscroll-behavior: contain; }
 .workspace-rules-dialog::backdrop { background: rgb(0 0 0 / 48%); }
 .workspace-rules-dialog-shell { display: grid; max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr); }
 .workspace-rules-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--hairline); padding: 24px 28px; }

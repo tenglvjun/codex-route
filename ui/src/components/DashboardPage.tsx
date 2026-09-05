@@ -36,8 +36,9 @@ export function DashboardPage({
           <button
             className="button-secondary-pill"
             type="button"
+            aria-haspopup="dialog"
             aria-expanded={workspaceRulesOpen}
-            aria-controls="workspace-rules-panel"
+            aria-controls="workspace-rules-dialog"
             onClick={onToggleWorkspaceRules}
           >
             <FolderTree size={16} aria-hidden="true" />

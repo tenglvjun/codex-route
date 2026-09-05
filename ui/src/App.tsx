@@ -360,12 +360,7 @@ function App() {
             onToggleWorkspaceRules={() => setWorkspaceRulesOpen((open) => !open)}
           />
         )}
-        {clientSnapshot && activeView === "dashboard" && workspaceRulesOpen && (
-          <section
-            className="workspace-panel-region utility-section dashboard-rules-region"
-            aria-labelledby="rules-heading"
-            id="workspace-rules-panel"
-          >
+        {clientSnapshot && (
             <WorkspaceRulesPanel
               providers={providers}
               rules={rules}
@@ -373,8 +368,9 @@ function App() {
               onSave={saveRule}
               onRemove={(workspace) => runAction(() => desktopApi.removeRouteRule(workspace))}
               onError={setError}
+              open={workspaceRulesOpen}
+              onOpenChange={setWorkspaceRulesOpen}
             />
-          </section>
         )}
         {clientSnapshot && activeView === "dashboard" && diagnosticsOpen && (
           <DiagnosticsPanel

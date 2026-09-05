@@ -109,7 +109,7 @@ describe("DashboardPage", () => {
 
     const toggle = screen.getByRole("button", { name: "Configure routes" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.getAttribute("aria-controls")).toBe("workspace-rules-panel");
+    expect(toggle.getAttribute("aria-controls")).toBe("workspace-rules-dialog");
     fireEvent.click(toggle);
     expect(onToggleWorkspaceRules).toHaveBeenCalledOnce();
   });

@@ -117,8 +117,11 @@ describe("App", () => {
     const routeSettings = screen.getByRole("button", { name: "Configure routes" });
     expect(routeSettings.getAttribute("aria-expanded")).toBe("false");
     await user.click(routeSettings);
-    expect(await screen.findByRole("heading", { name: "Workspace rules" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Workspace rules" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Hide route settings" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close workspace rules" }));
+    expect(screen.queryByRole("dialog", { name: "Workspace rules" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Configure routes" }).getAttribute("aria-expanded")).toBe("false");
     await user.click(screen.getByRole("tab", { name: "Providers" }));
     expect(await screen.findByRole("heading", { name: "Providers", level: 2 })).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Activate route" }).getAttribute("data-route-state")).toBe(

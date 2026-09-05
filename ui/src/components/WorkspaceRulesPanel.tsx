@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { Check, FolderOpen, FolderTree, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ProviderSummary, UpsertRouteRuleRequest, WorkspaceRouteRule } from "../api";
 import { displayError } from "../errors";
@@ -11,6 +11,8 @@ type WorkspaceRulesPanelProps = {
   onSave: (request: UpsertRouteRuleRequest) => Promise<void>;
   onRemove: (workspace: string) => Promise<boolean>;
   onError: (message: string) => void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 type FormErrors = {
@@ -26,12 +28,20 @@ export function WorkspaceRulesPanel({
   onSave,
   onRemove,
   onError,
+  open,
+  onOpenChange,
 }: WorkspaceRulesPanelProps) {
+  const [internalOpen, setInternalOpen] = useState(open ?? true);
+  const dialogOpen = open ?? internalOpen;
   const [workspace, setWorkspace] = useState("");
   const [providerId, setProviderId] = useState("");
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
   const formErrorRef = useRef<HTMLParagraphElement>(null);
 
   const providerNames = useMemo(
@@ -43,13 +53,10 @@ export function WorkspaceRulesPanel({
       ? providerId
       : providers.find((provider) => provider.isCurrent)?.id || providers[0]?.id || "";
 
-  useEffect(() => {
-    if (errors.form) formErrorRef.current?.focus();
-  }, [errors.form]);
-
-  useEffect(() => {
-    if (formOpen) document.getElementById("workspace-rule-provider")?.focus();
-  }, [formOpen]);
+  const setDialogOpen = (nextOpen: boolean) => {
+    if (open === undefined) setInternalOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+  };
 
   const resetForm = () => {
     setWorkspace("");
@@ -58,6 +65,45 @@ export function WorkspaceRulesPanel({
     setErrors({});
     setFormOpen(false);
   };
+
+  const closeDialog = () => {
+    if (busy) return;
+    resetForm();
+    setDialogOpen(false);
+  };
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialogOpen) {
+      if (!wasOpenRef.current) {
+        openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      }
+      if (dialog && !dialog.open) {
+        if (typeof dialog.showModal === "function") dialog.showModal();
+        else dialog.setAttribute("open", "");
+      }
+      closeButtonRef.current?.focus();
+    } else {
+      if (dialog?.open) {
+        if (typeof dialog.close === "function") dialog.close();
+        else dialog.removeAttribute("open");
+      }
+      if (wasOpenRef.current) {
+        if (openerRef.current?.isConnected) openerRef.current.focus();
+        else (document.querySelector('[aria-controls="workspace-rules-dialog"]') as HTMLElement | null)?.focus();
+      }
+      resetForm();
+    }
+    wasOpenRef.current = dialogOpen;
+  }, [dialogOpen]);
+
+  useEffect(() => {
+    if (errors.form) formErrorRef.current?.focus();
+  }, [errors.form]);
+
+  useEffect(() => {
+    if (formOpen) document.getElementById("workspace-rule-provider")?.focus();
+  }, [formOpen]);
 
   const openCreateForm = () => {
     setWorkspace("");
@@ -77,7 +123,7 @@ export function WorkspaceRulesPanel({
 
   const chooseWorkspace = async () => {
     try {
-      const selected = await open({
+      const selected = await openDirectory({
         directory: true,
         multiple: false,
         title: "Choose a Codex workspace",
@@ -144,142 +190,166 @@ export function WorkspaceRulesPanel({
   };
 
   return (
-    <section className="panel rules-panel" aria-labelledby="rules-heading">
-      <div className="panel-heading">
-        <div className="panel-heading-title">
-          <h2 id="rules-heading">Workspace rules</h2>
-          <span className="count">{rules.length}</span>
-        </div>
-        <div className="panel-heading-actions">
-          <button
-            className="button-primary panel-add-button"
-            type="button"
-            onClick={openCreateForm}
-            disabled={busy || providers.length === 0}
-          >
-            <Plus size={16} aria-hidden="true" />
-            Add rule
-          </button>
-        </div>
-      </div>
-
-      {formOpen && <form className="rule-form rules-form-surface" onSubmit={submitRule} noValidate>
-        <div className="form-heading">
-          <strong>{editingWorkspace ? "Edit rule" : "New rule"}</strong>
-          <button type="button" className="text-button" onClick={resetForm} disabled={busy}>
-            <X size={14} aria-hidden="true" />
-            Cancel
-          </button>
-        </div>
-        <div className="form-grid">
-          <div className="field workspace-field">
-            <label htmlFor="workspace-rule-workspace">Workspace path</label>
-            <div className="input-action">
-              <input
-                id="workspace-rule-workspace"
-                type="text"
-                value={workspace}
-                onChange={(event) => {
-                  setWorkspace(event.target.value);
-                  setErrors((current) => ({ ...current, workspace: undefined, form: undefined }));
-                }}
-                placeholder="Choose or enter an absolute path"
-                aria-describedby={errors.workspace ? "workspace-rule-workspace-error" : undefined}
-                aria-invalid={errors.workspace ? "true" : undefined}
-                disabled={busy}
-                readOnly={editingWorkspace !== null}
-              />
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => void chooseWorkspace()}
-                disabled={busy || editingWorkspace !== null}
-                aria-label="Choose workspace folder"
-                title="Choose workspace folder"
-              >
-                <FolderOpen size={18} aria-hidden="true" />
-              </button>
-            </div>
-            {errors.workspace && (
-              <p className="field-error" id="workspace-rule-workspace-error">{errors.workspace}</p>
-            )}
+    <dialog
+      className="workspace-rules-dialog"
+      id="workspace-rules-dialog"
+      ref={dialogRef}
+      aria-labelledby="rules-heading"
+      onCancel={(event) => {
+        event.preventDefault();
+        closeDialog();
+      }}
+    >
+      <div className="workspace-rules-dialog-shell">
+        <header className="workspace-rules-dialog-header">
+          <div className="panel-heading-title">
+            <h2 id="rules-heading">Workspace rules</h2>
+            <span className="count">{rules.length}</span>
           </div>
-          <div className="field">
-            <label htmlFor="workspace-rule-provider">Provider</label>
-            <select
-              id="workspace-rule-provider"
-              value={selectedProviderId}
-              onChange={(event) => {
-                setProviderId(event.target.value);
-                setErrors((current) => ({ ...current, provider: undefined, form: undefined }));
-              }}
-              aria-describedby={errors.provider ? "workspace-rule-provider-error" : undefined}
-              aria-invalid={errors.provider ? "true" : undefined}
+          <div className="panel-heading-actions">
+            <button
+              className="button-primary panel-add-button"
+              type="button"
+              onClick={openCreateForm}
               disabled={busy || providers.length === 0}
             >
-              <option value="">Choose provider</option>
-              {providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>{provider.name}</option>
-              ))}
-            </select>
-            {errors.provider && (
-              <p className="field-error" id="workspace-rule-provider-error">{errors.provider}</p>
-            )}
+              <Plus size={16} aria-hidden="true" />
+              Add rule
+            </button>
+            <button
+              className="icon-button workspace-rules-dialog-close"
+              type="button"
+              ref={closeButtonRef}
+              aria-label="Close workspace rules"
+              title="Close"
+              onClick={closeDialog}
+              disabled={busy}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
           </div>
-          <button className="button primary form-submit" type="submit" disabled={busy || providers.length === 0}>
-            <Check size={15} aria-hidden="true" />
-            Save
-          </button>
-        </div>
-        {errors.form && (
-          <p className="form-error" ref={formErrorRef} role="alert" tabIndex={-1}>
-            {errors.form}
-          </p>
-        )}
-      </form>}
+        </header>
 
-      {rules.length === 0 ? (
-        <div className="empty-state rules-empty-state" role="status">
-          <FolderTree size={30} aria-hidden="true" />
-          <div>
-            <strong>No workspace rules</strong>
-            {providers.length === 0 && <p className="muted">Add a provider first.</p>}
-          </div>
-        </div>
-      ) : (
-        <div className="rules-list">
-          {rules.map((rule) => (
-            <div className="rule-row rule-item" key={rule.workspace}>
-              <div className="rule-details rule-meta">
-                <strong>{rule.workspace}</strong>
-                <span className="muted">
-                  {providerNames.get(rule.providerId) || rule.providerId}
-                </span>
+        <div className="workspace-rules-dialog-body">
+          {formOpen && <form className="rule-form rules-form-surface" onSubmit={submitRule} noValidate>
+            <div className="form-heading">
+              <strong>{editingWorkspace ? "Edit rule" : "New rule"}</strong>
+              <button type="button" className="text-button" onClick={resetForm} disabled={busy}>
+                <X size={14} aria-hidden="true" />
+                Cancel
+              </button>
+            </div>
+            <div className="form-grid">
+              <div className="field workspace-field">
+                <label htmlFor="workspace-rule-workspace">Workspace path</label>
+                <div className="input-action">
+                  <input
+                    id="workspace-rule-workspace"
+                    type="text"
+                    value={workspace}
+                    onChange={(event) => {
+                      setWorkspace(event.target.value);
+                      setErrors((current) => ({ ...current, workspace: undefined, form: undefined }));
+                    }}
+                    placeholder="Choose or enter an absolute path"
+                    aria-describedby={errors.workspace ? "workspace-rule-workspace-error" : undefined}
+                    aria-invalid={errors.workspace ? "true" : undefined}
+                    disabled={busy}
+                    readOnly={editingWorkspace !== null}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => void chooseWorkspace()}
+                    disabled={busy || editingWorkspace !== null}
+                    aria-label="Choose workspace folder"
+                    title="Choose workspace folder"
+                  >
+                    <FolderOpen size={18} aria-hidden="true" />
+                  </button>
+                </div>
+                {errors.workspace && (
+                  <p className="field-error" id="workspace-rule-workspace-error">{errors.workspace}</p>
+                )}
               </div>
-              <div className="row-actions rule-actions">
-                <button
-                  className="icon-button"
-                  onClick={() => editRule(rule)}
-                  disabled={busy}
-                  aria-label={`Edit route for ${rule.workspace}`}
-                  title="Edit rule"
+              <div className="field">
+                <label htmlFor="workspace-rule-provider">Provider</label>
+                <select
+                  id="workspace-rule-provider"
+                  value={selectedProviderId}
+                  onChange={(event) => {
+                    setProviderId(event.target.value);
+                    setErrors((current) => ({ ...current, provider: undefined, form: undefined }));
+                  }}
+                  aria-describedby={errors.provider ? "workspace-rule-provider-error" : undefined}
+                  aria-invalid={errors.provider ? "true" : undefined}
+                  disabled={busy || providers.length === 0}
                 >
-                  <Pencil size={17} aria-hidden="true" />
-                </button>
-                <button
-                  className="icon-button danger"
-                  onClick={() => void removeRule(rule)}
-                  disabled={busy}
-                  aria-label={`Remove route for ${rule.workspace}`}
-                  title="Remove rule"
-                >
-                  <Trash2 size={17} aria-hidden="true" />
-                </button>
+                  <option value="">Choose provider</option>
+                  {providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>{provider.name}</option>
+                  ))}
+                </select>
+                {errors.provider && (
+                  <p className="field-error" id="workspace-rule-provider-error">{errors.provider}</p>
+                )}
+              </div>
+              <button className="button primary form-submit" type="submit" disabled={busy || providers.length === 0}>
+                <Check size={15} aria-hidden="true" />
+                Save
+              </button>
+            </div>
+            {errors.form && (
+              <p className="form-error" ref={formErrorRef} role="alert" tabIndex={-1}>
+                {errors.form}
+              </p>
+            )}
+          </form>}
+
+          {rules.length === 0 ? (
+            <div className="empty-state rules-empty-state" role="status">
+              <FolderTree size={30} aria-hidden="true" />
+              <div>
+                <strong>No workspace rules</strong>
+                {providers.length === 0 && <p className="muted">Add a provider first.</p>}
               </div>
             </div>
-          ))}
+          ) : (
+            <div className="rules-list">
+              {rules.map((rule) => (
+                <div className="rule-row rule-item" key={rule.workspace}>
+                  <div className="rule-details rule-meta">
+                    <strong>{rule.workspace}</strong>
+                    <span className="muted">
+                      {providerNames.get(rule.providerId) || rule.providerId}
+                    </span>
+                  </div>
+                  <div className="row-actions rule-actions">
+                    <button
+                      className="icon-button"
+                      onClick={() => editRule(rule)}
+                      disabled={busy}
+                      aria-label={`Edit route for ${rule.workspace}`}
+                      title="Edit rule"
+                    >
+                      <Pencil size={17} aria-hidden="true" />
+                    </button>
+                    <button
+                      className="icon-button danger"
+                      onClick={() => void removeRule(rule)}
+                      disabled={busy}
+                      aria-label={`Remove route for ${rule.workspace}`}
+                      title="Remove rule"
+                    >
+                      <Trash2 size={17} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      )}
-    </section>
+      </div>
+    </dialog>
   );
 }

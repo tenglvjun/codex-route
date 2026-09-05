@@ -183,6 +183,14 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
 .count { display: inline-flex; min-width: 36px; min-height: 32px; align-items: center; justify-content: center; border-radius: 11px; padding: 8px 12px; color: var(--ink-muted-80); background: var(--surface-pearl); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .provider-import-dialog { width: min(calc(100% - 32px), 720px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
 .provider-import-dialog::backdrop { background: rgb(0 0 0 / 48%); }
+.workspace-rules-dialog { width: min(calc(100% - 32px), 760px); max-width: none; max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--hairline); border-radius: 18px; padding: 0; color: var(--ink); background: var(--canvas); box-shadow: none; overflow: hidden; }
+.workspace-rules-dialog::backdrop { background: rgb(0 0 0 / 48%); }
+.workspace-rules-dialog-shell { display: grid; max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr); }
+.workspace-rules-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--hairline); padding: 20px 24px; }
+.workspace-rules-dialog-header .panel-heading-title { flex: 1 1 auto; }
+.workspace-rules-dialog-header .panel-heading-actions { flex: 0 0 auto; }
+.workspace-rules-dialog-close { margin: -6px -6px -6px 0; }
+.workspace-rules-dialog-body { min-height: 220px; overflow-y: auto; overscroll-behavior: contain; }
 .import-dialog-shell { display: grid; max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr) auto; }
 .import-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--hairline); padding: 24px; }
 .import-dialog-header .eyebrow { margin-bottom: 8px; }
@@ -304,6 +312,10 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .provider-list, .rules-list { padding-inline: 20px; }
   .provider-import-dialog { width: calc(100% - 24px); max-height: calc(100dvh - 24px); border-radius: 18px; }
   .import-dialog-shell { max-height: calc(100dvh - 24px); }
+  .workspace-rules-dialog { width: calc(100% - 24px); max-height: calc(100dvh - 24px); border-radius: 18px; }
+  .workspace-rules-dialog-shell { max-height: calc(100dvh - 24px); }
+  .workspace-rules-dialog-header { align-items: flex-start; padding: 20px; }
+  .workspace-rules-dialog-header .panel-heading-actions { align-items: flex-start; }
   .import-dialog-header { padding: 20px; }
   .import-dialog-body { padding: 0 20px 20px; }
   .import-dialog-footer { align-items: stretch; flex-direction: column; padding: 16px 20px 20px; }
@@ -338,6 +350,10 @@ h2 { margin-bottom: 0; color: inherit; font-family: "SF Pro Text", system-ui, -a
   .provider-list, .rules-list { padding-inline: 16px; }
   .provider-import-dialog { width: calc(100% - 16px); max-height: calc(100dvh - 16px); border-radius: 8px; }
   .import-dialog-shell { max-height: calc(100dvh - 16px); }
+  .workspace-rules-dialog { width: calc(100% - 16px); max-height: calc(100dvh - 16px); border-radius: 8px; }
+  .workspace-rules-dialog-shell { max-height: calc(100dvh - 16px); }
+  .workspace-rules-dialog-header { align-items: flex-start; flex-direction: column; gap: 16px; padding: 16px; }
+  .workspace-rules-dialog-header .panel-heading-actions { width: 100%; justify-content: space-between; }
   .import-dialog-header { padding: 16px; }
   .import-dialog-body { padding: 0 16px 16px; }
   .import-dialog-footer { padding: 16px; }

@@ -396,6 +396,18 @@ mod tests {
                 serde_json::json!({"subagent": {"thread_spawn": {}}}),
                 RolloutSource::Other("subagent".to_string()),
             ),
+            (
+                serde_json::json!({"internal": "memory_consolidation"}),
+                RolloutSource::Other("internal".to_string()),
+            ),
+            (
+                serde_json::json!("mcp"),
+                RolloutSource::Other("mcp".to_string()),
+            ),
+            (
+                serde_json::json!("custom-client"),
+                RolloutSource::Other("custom-client".to_string()),
+            ),
         ] {
             let mut value: Value =
                 serde_json::from_slice(&metadata_line("session-1", "thread-1", &workspace))

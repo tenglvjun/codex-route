@@ -963,6 +963,11 @@ fn terminate_process(pid: u32) -> Result<(), String> {
         // request. Terminate the route process tree explicitly so lifecycle
         // shutdown is bounded and reliable on Windows.
         .args(["/PID", &pid.to_string(), "/T", "/F"])
+        // Keep taskkill's human-readable diagnostics out of the CLI's JSON
+        // stdout/stderr contract. The exit status below remains the error
+        // signal for callers.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
     match result {
         Ok(status) if status.success() => Ok(()),
@@ -1048,6 +1053,8 @@ fn force_terminate_process(pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     let result = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
     match result {
         Ok(status) if status.success() => Ok(()),

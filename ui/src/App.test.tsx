@@ -168,6 +168,31 @@ describe("App", () => {
     await waitFor(() => expect(desktopApi.activateRoute).toHaveBeenCalledWith(16729));
   });
 
+  it("releases protected route state from the global toggle", async () => {
+    const user = userEvent.setup();
+    vi.mocked(clientFacade.loadSnapshot).mockResolvedValue({
+      ...clientSnapshot,
+      runtime: {
+        ...clientSnapshot.runtime,
+        phase: "blocked_external_modification",
+        configManaged: true,
+        externalModification: true,
+      },
+    });
+    vi.mocked(desktopApi.deactivateRoute).mockResolvedValue({
+      status: "inactive",
+      configRestored: false,
+      configPath: "/tmp/.codex/config.toml",
+    });
+    render(<App />);
+
+    const routeToggle = await screen.findByRole("switch", { name: "Deactivate route" });
+    expect(routeToggle).toHaveProperty("disabled", false);
+    expect(routeToggle.getAttribute("aria-checked")).toBe("true");
+    await user.click(routeToggle);
+    await waitFor(() => expect(desktopApi.deactivateRoute).toHaveBeenCalledOnce());
+  });
+
   it("uses the saved Settings port when activating from the global toggle", async () => {
     const user = userEvent.setup();
     render(<App />);

@@ -22,6 +22,9 @@ export function RouteStatusPanel({
   onDeactivate,
 }: RouteStatusPanelProps) {
   const t = useTranslation();
+  const routeEngaged = status !== null && (
+    status.active || status.configManaged || status.externalModification
+  );
   const routeState = status?.externalModification
     ? "external-modified"
     : status?.active
@@ -115,7 +118,7 @@ export function RouteStatusPanel({
             max="65535"
             value={port}
             onChange={(event) => onPortChange(event.target.value)}
-            disabled={busy || status?.active === true}
+            disabled={busy || routeEngaged}
           />
         </label>
         <div className="actions route-switch" data-route-state={routeState} role="group" aria-label={t("routeControls")}>
@@ -124,7 +127,7 @@ export function RouteStatusPanel({
             type="button"
             data-route-action="activate"
             onClick={onActivate}
-            disabled={busy || status?.active === true || !canActivate}
+            disabled={busy || routeEngaged || !canActivate}
           >
             <Power size={16} aria-hidden="true" />
             {t("activate")}
@@ -134,7 +137,7 @@ export function RouteStatusPanel({
             type="button"
             data-route-action="deactivate"
             onClick={onDeactivate}
-            disabled={busy || status?.active !== true}
+            disabled={busy || !routeEngaged}
           >
             <Square size={15} aria-hidden="true" />
             {t("deactivate")}

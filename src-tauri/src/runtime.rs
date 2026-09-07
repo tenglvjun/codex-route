@@ -136,6 +136,34 @@ impl RouteSupervisor {
             .await;
     }
 
+    /// Synchronize the in-memory snapshot with persisted lifecycle state
+    /// without starting or stopping the route. This makes stale embedded
+    /// state actionable after the desktop process is restarted.
+    pub async fn refresh_status(&self) {
+        let status = {
+            let route = self.route.lock().await;
+            route.status()
+        };
+        match status {
+            Ok(status) => {
+                let phase = if status.external_modification {
+                    RuntimePhase::BlockedExternalModification
+                } else if status.active {
+                    RuntimePhase::Running
+                } else if status.config_managed {
+                    RuntimePhase::Degraded
+                } else {
+                    RuntimePhase::Stopped
+                };
+                self.publish_from_status(phase, status, None).await;
+            }
+            Err(error) => {
+                self.publish_phase(RuntimePhase::Degraded, Some(error.to_string()), false)
+                    .await;
+            }
+        }
+    }
+
     pub async fn start_health_monitor(self: &Arc<Self>) {
         let mut monitor = self.monitor.lock().await;
         if monitor.as_ref().is_some_and(|task| !task.is_finished()) {
@@ -527,7 +555,17 @@ fn now_unix_seconds() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{restart_delay, same_snapshot, RuntimePhase, RuntimeSnapshot};
+    use super::{restart_delay, same_snapshot, RouteSupervisor, RuntimePhase, RuntimeSnapshot};
+    use codex_route::config::ScanConfig;
+    use codex_route::lifecycle::{EmbeddedRouteService, LifecyclePaths};
+    use codex_route::provider::{Provider, ProviderSource};
+    use codex_route::provider_store::ProviderStore;
+    use serde_json::json;
+    use std::fs;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::Mutex;
 
     #[test]
     fn runtime_snapshot_starts_stopped_and_tracks_restart_count() {
@@ -559,5 +597,85 @@ mod tests {
         assert_eq!(restart_delay(3).as_secs(), 4);
         assert_eq!(restart_delay(4).as_secs(), 8);
         assert_eq!(restart_delay(9).as_secs(), 8);
+    }
+
+    #[tokio::test]
+    async fn refresh_status_exposes_stale_embedded_state_for_release() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codex-route-runtime-refresh-{}-{unique}",
+            std::process::id()
+        ));
+        let data_dir = root.join("data");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(codex_home.join("config.toml"), "model = \"gpt-5-codex\"\n").unwrap();
+
+        let store = Arc::new(ProviderStore::open(data_dir.join("codex-route.db")).unwrap());
+        store
+            .insert(&Provider {
+                id: "provider-a".into(),
+                name: "Provider A".into(),
+                settings_config: json!({
+                    "auth": {"OPENAI_API_KEY": "sk-test"},
+                    "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"http://127.0.0.1:1/v1\"\n"
+                }),
+                website_url: None,
+                category: None,
+                created_at: None,
+                sort_index: None,
+                notes: None,
+                icon: None,
+                icon_color: None,
+                meta: json!({}),
+                in_failover_queue: false,
+                is_current: true,
+                source: ProviderSource::Local,
+            })
+            .unwrap();
+
+        let port = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let scan_config = ScanConfig {
+            codex_home: codex_home.clone(),
+            max_rollout_bytes: 64 * 1024,
+        };
+        let paths = LifecyclePaths::new(data_dir.clone(), codex_home.clone());
+
+        {
+            let mut old_service = EmbeddedRouteService::new(
+                paths.clone(),
+                Arc::clone(&store),
+                scan_config.clone(),
+                None,
+                port,
+            );
+            old_service.activate().await.unwrap();
+        }
+
+        let new_service = EmbeddedRouteService::new(paths, store, scan_config, None, port);
+        let supervisor = Arc::new(RouteSupervisor::new(Arc::new(Mutex::new(new_service))));
+        supervisor.refresh_status().await;
+
+        let snapshot = supervisor.snapshot().await;
+        assert_eq!(snapshot.phase, RuntimePhase::Degraded);
+        assert!(!snapshot.active);
+        assert!(snapshot.config_managed);
+        assert!(!snapshot.external_modification);
+
+        supervisor.stop().await.unwrap();
+        assert!(!data_dir.join("route-state.json").exists());
+        assert_eq!(
+            fs::read_to_string(codex_home.join("config.toml")).unwrap(),
+            "model = \"gpt-5-codex\"\n"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

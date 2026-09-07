@@ -627,19 +627,6 @@ impl EmbeddedRouteService {
         let matches_managed = current
             .as_deref()
             .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
-        let matches_original = current.as_deref().is_some_and(|contents| {
-            state
-                .original_hash
-                .as_deref()
-                .is_some_and(|hash| content_hash(contents.as_bytes()) == hash)
-        }) || (!state.original_exists && current.is_none());
-        let active = self
-            .server
-            .as_ref()
-            .is_some_and(|server| server.status().active);
-        if !matches_managed && (!matches_original || active) {
-            return Err(LifecycleError::ExternalModification);
-        }
         if matches_managed && state.original_exists {
             let _ = read_verified_backup(&state)?;
         }
@@ -657,24 +644,19 @@ impl EmbeddedRouteService {
             }
         }
 
-        if matches_managed {
-            let current_after_stop = read_optional(&state.config_path)?;
-            let still_managed = current_after_stop
-                .as_deref()
-                .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
-            if !still_managed {
-                return Err(LifecycleError::ExternalModification);
-            }
-        }
-
-        let backup = if matches_managed && state.original_exists {
+        let current_after_stop = read_optional(&state.config_path)?;
+        let still_managed = current_after_stop
+            .as_deref()
+            .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
+        let restore_managed_config = matches_managed && still_managed;
+        let backup = if restore_managed_config && state.original_exists {
             Some(read_verified_backup(&state)?)
         } else {
             None
         };
         if let Some(backup) = backup {
             atomic_write(&state.config_path, &backup)?;
-        } else if matches_managed && state.config_path.exists() {
+        } else if restore_managed_config && state.config_path.exists() {
             fs::remove_file(&state.config_path)?;
         }
         let _ = fs::remove_file(self.paths.lock_path());
@@ -683,7 +665,7 @@ impl EmbeddedRouteService {
         Ok(DeactivationResult {
             status: "inactive",
             pid: Some(state.pid.unwrap_or(std::process::id())),
-            config_restored: true,
+            config_restored: restore_managed_config,
             config_path: state.config_path,
         })
     }
@@ -769,21 +751,16 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
         return Err(LifecycleError::NotActive);
     };
     validate_state_paths(&state, &options.paths)?;
+    if state.service_kind == LifecycleServiceKind::Embedded {
+        return Err(LifecycleError::Stop(
+            "lifecycle state is owned by the desktop route service".into(),
+        ));
+    }
     let pid = lifecycle_pid(&state, &options.paths.lock_path());
     let current = read_optional(&state.config_path)?;
     let matches_managed = current
         .as_deref()
         .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
-    let matches_original = current.as_deref().is_some_and(|contents| {
-        state
-            .original_hash
-            .as_deref()
-            .is_some_and(|hash| content_hash(contents.as_bytes()) == hash)
-    }) || (!state.original_exists && current.is_none());
-    if !matches_managed && (!matches_original || pid.is_some()) {
-        return Err(LifecycleError::ExternalModification);
-    }
-
     // Verify the backup before stopping the service. This prevents a damaged
     // backup from turning a successful stop into a destructive config restore.
     if matches_managed && state.original_exists {
@@ -807,19 +784,12 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
         stop_process(pid).map_err(LifecycleError::Stop)?;
     }
 
-    // The service can touch the Codex config while it is shutting down. Do not
-    // overwrite those changes; leave lifecycle state in place for recovery.
-    if matches_managed {
-        let current_after_stop = read_optional(&state.config_path)?;
-        let still_managed = current_after_stop
-            .as_deref()
-            .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
-        if !still_managed {
-            return Err(LifecycleError::ExternalModification);
-        }
-    }
-
-    let backup = if matches_managed && state.original_exists {
+    let current_after_stop = read_optional(&state.config_path)?;
+    let still_managed = current_after_stop
+        .as_deref()
+        .is_some_and(|contents| content_hash(contents.as_bytes()) == state.managed_hash);
+    let restore_managed_config = matches_managed && still_managed;
+    let backup = if restore_managed_config && state.original_exists {
         // Re-read and re-validate immediately before writing. The initial
         // verification protects the stop path; this one protects the restore
         // path if another process replaced the backup while stopping.
@@ -829,7 +799,7 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
     };
     if let Some(backup) = backup {
         atomic_write(&state.config_path, &backup)?;
-    } else if matches_managed && state.config_path.exists() {
+    } else if restore_managed_config && state.config_path.exists() {
         fs::remove_file(&state.config_path)?;
     }
     let _ = fs::remove_file(options.paths.lock_path());
@@ -838,7 +808,7 @@ pub fn deactivate(options: DeactivateOptions) -> Result<DeactivationResult, Life
     Ok(DeactivationResult {
         status: "inactive",
         pid: pid.or(state.pid),
-        config_restored: true,
+        config_restored: restore_managed_config,
         config_path: state.config_path,
     })
 }

@@ -71,6 +71,7 @@ impl<R: Runtime> ClientCoordinator<R> {
         }
 
         let settings = self.state.settings.read().await.clone();
+        self.state.runtime.refresh_status().await;
         if should_auto_start(&settings) {
             if let Err(error) = self
                 .state

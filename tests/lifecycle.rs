@@ -282,7 +282,7 @@ fn activation_rejects_port_conflicts_and_duplicate_processes() {
 }
 
 #[test]
-fn deactivate_refuses_to_overwrite_external_config_changes() {
+fn deactivate_releases_external_config_changes_without_overwriting_them() {
     let (_directory, data_dir, codex_home, port) = setup();
     let config_path = Path::new(&codex_home).join("config.toml");
     let original = "model = \"gpt-5-codex\"\n";
@@ -299,25 +299,54 @@ fn deactivate_refuses_to_overwrite_external_config_changes() {
         .unwrap()
         .write_all(b"# changed outside codex-route\n")
         .unwrap();
-    command(&data_dir, &codex_home, "deactivate")
-        .assert()
-        .failure()
-        .code(4)
-        .stderr(predicate::str::contains("externally modified"));
-    let status = command_without_home(&data_dir, "status").output().unwrap();
-    assert!(status.status.success());
-    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
-    assert_eq!(status["status"], "external_modified");
-    assert_eq!(status["externalModification"], true);
-    assert!(fs::read_to_string(&config_path)
-        .unwrap()
-        .contains("changed outside codex-route"));
+    let deactivated = command(&data_dir, &codex_home, "deactivate")
+        .output()
+        .unwrap();
+    assert!(
+        deactivated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deactivated.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&deactivated.stdout).unwrap();
+    assert_eq!(result["configRestored"], false);
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        format!("{managed}# changed outside codex-route\n")
+    );
+    assert!(!Path::new(&data_dir).join("route-state.json").exists());
+    assert!(!Path::new(&data_dir).join("route.lock").exists());
+    assert!(!Path::new(&data_dir).join("codex-config.toml.bak").exists());
+}
 
-    // Restore the managed bytes so the child can be shut down and the fixture cleaned up.
-    fs::write(&config_path, managed).unwrap();
-    command(&data_dir, &codex_home, "deactivate")
-        .assert()
-        .success();
+#[tokio::test]
+async fn embedded_route_service_releases_external_config_without_overwriting_it() {
+    let (_directory, data_dir, codex_home, port) = setup();
+    let data_dir = Path::new(&data_dir).to_path_buf();
+    let codex_home = Path::new(&codex_home).to_path_buf();
+    let config_path = codex_home.join("config.toml");
+    let original = "model = \"gpt-5-codex\"\n";
+    fs::write(&config_path, original).unwrap();
+    let store = Arc::new(ProviderStore::open(data_dir.join("codex-route.db")).unwrap());
+    let scan_config = ScanConfig {
+        codex_home: codex_home.clone(),
+        max_rollout_bytes: 64 * 1024,
+    };
+    let paths = LifecyclePaths::new(data_dir.clone(), codex_home);
+    let mut service = EmbeddedRouteService::new(paths, store, scan_config, None, port);
+    service.activate().await.unwrap();
+
+    let external = "model_provider = \"cc-switch\"\n";
+    fs::write(&config_path, external).unwrap();
+    let result = service.deactivate().await.unwrap();
+
+    assert!(!result.config_restored);
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), external);
+    assert!(reqwest::get(format!("http://127.0.0.1:{port}/healthz"))
+        .await
+        .is_err());
+    assert!(!data_dir.join("route-state.json").exists());
+    assert!(!data_dir.join("route.lock").exists());
+    assert!(!data_dir.join("codex-config.toml.bak").exists());
 }
 
 #[test]

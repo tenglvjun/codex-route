@@ -88,6 +88,12 @@ function App({ initialSettings = DEFAULT_SETTINGS }: AppProps) {
     [providers],
   );
 
+  // A persisted route state remains engaged until it is explicitly released,
+  // even when its listener is no longer reachable.
+  const routeEngaged = status !== null && (
+    status.active || status.configManaged || status.externalModification
+  );
+
   const routeLabel = useMemo(() => {
     if (!status) return "loadingRoute" as const;
     if (status.externalModification) return "protected" as const;
@@ -253,8 +259,7 @@ function App({ initialSettings = DEFAULT_SETTINGS }: AppProps) {
 
   const toggleRoute = () => {
     if (!status || busy) return;
-    if (status.active) {
-      if (status.externalModification) return;
+    if (routeEngaged) {
       void runAction(() => desktopApi.deactivateRoute());
       return;
     }
@@ -348,18 +353,17 @@ function App({ initialSettings = DEFAULT_SETTINGS }: AppProps) {
                 <span>{t(routeLabel)}</span>
               </span>
               <button
-                className={`route-toggle${status?.active ? " active" : ""}`}
+                className={`route-toggle${routeEngaged ? " active" : ""}`}
                 type="button"
                 role="switch"
-                aria-checked={status?.active === true}
+                aria-checked={routeEngaged}
                 data-route-state={routeState}
-                aria-label={status?.active ? t("deactivateRoute") : t("activateRoute")}
+                aria-label={routeEngaged ? t("deactivateRoute") : t("activateRoute")}
                 onClick={toggleRoute}
                 disabled={
                   busy ||
                   !status ||
-                  (!status.active && currentProvider === undefined) ||
-                  status.externalModification
+                  (!routeEngaged && currentProvider === undefined)
                 }
               >
                 <span className="route-toggle-track" aria-hidden="true"><span /></span>

@@ -16,6 +16,7 @@ use serde_json::json;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
@@ -224,6 +225,25 @@ async fn compressed_stream_response() -> Response<Body> {
     response
 }
 
+async fn delayed_response_headers() -> Response<Body> {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut response = Response::new(Body::from(r#"{"id":"delayed"}"#));
+    *response.status_mut() = StatusCode::CREATED;
+    response
+}
+
+async fn delayed_response_body() -> Response<Body> {
+    let chunks = stream::once(async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        Ok::<_, Infallible>(Bytes::from_static(b"delayed-body"))
+    });
+    let mut response = Response::new(Body::from_stream(chunks));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+    response
+}
+
 fn provider(
     id: &str,
     base_url: &str,
@@ -321,6 +341,47 @@ fn extracts_codex_session_from_header_or_metadata_without_using_previous_respons
     );
 }
 
+#[test]
+fn extracts_current_codex_turn_metadata_before_legacy_sources() {
+    let headers = HeaderMap::new();
+    let body = json!({
+        "client_metadata": {
+            "x-codex-turn-metadata": "{\"session_id\":\"turn-session\"}"
+        },
+        "metadata": {"session_id": "legacy-session"}
+    });
+    assert_eq!(
+        extract_codex_session_id(&headers, &body),
+        Some("turn-session".to_string())
+    );
+}
+
+#[test]
+fn accepts_object_turn_metadata_and_falls_through_invalid_values() {
+    let empty = HeaderMap::new();
+    assert_eq!(
+        extract_codex_session_id(
+            &empty,
+            &json!({
+                "client_metadata": {
+                    "x-codex-turn-metadata": {"session_id": "object-session"}
+                }
+            })
+        ),
+        Some("object-session".to_string())
+    );
+    assert_eq!(
+        extract_codex_session_id(
+            &empty,
+            &json!({
+                "client_metadata": {"x-codex-turn-metadata": "not-json"},
+                "metadata": {"session_id": "legacy-session"}
+            })
+        ),
+        Some("legacy-session".to_string())
+    );
+}
+
 #[tokio::test]
 async fn routes_session_workspace_to_rule_provider_and_falls_back_to_current() {
     let home = TempDir::new().unwrap();
@@ -384,7 +445,11 @@ async fn routes_session_workspace_to_rule_provider_and_falls_back_to_current() {
 
     let response_b = client
         .post(format!("http://{route_address}/v1/responses"))
-        .json(&json!({"metadata": {"session_id": "session-b"}}))
+        .json(&json!({
+            "client_metadata": {
+                "x-codex-turn-metadata": "{\"session_id\":\"session-b\"}"
+            }
+        }))
         .send()
         .await
         .unwrap();
@@ -1341,4 +1406,70 @@ async fn maps_provider_and_upstream_errors() {
         "provider_configuration_error"
     );
     route_task.abort();
+}
+
+#[tokio::test]
+async fn returns_gateway_timeout_when_upstream_headers_are_too_slow() {
+    let directory = TempDir::new().unwrap();
+    let upstream = Router::new().route("/v1/responses", post(delayed_response_headers));
+    let (upstream_address, upstream_task) = spawn_router(upstream).await;
+    let state = route_state(
+        &directory,
+        provider(
+            "slow",
+            &format!("http://{upstream_address}/v1"),
+            Some("responses"),
+            Some("slow-key"),
+        ),
+    )
+    .with_upstream_header_timeout(Duration::from_millis(20));
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+        "upstream_timeout"
+    );
+
+    route_task.abort();
+    upstream_task.abort();
+}
+
+#[tokio::test]
+async fn response_body_can_stream_after_header_timeout_window() {
+    let directory = TempDir::new().unwrap();
+    let upstream = Router::new().route("/v1/responses", post(delayed_response_body));
+    let (upstream_address, upstream_task) = spawn_router(upstream).await;
+    let state = route_state(
+        &directory,
+        provider(
+            "stream",
+            &format!("http://{upstream_address}/v1"),
+            Some("responses"),
+            Some("stream-key"),
+        ),
+    )
+    .with_upstream_header_timeout(Duration::from_millis(20));
+    let (route_address, route_task) = spawn_router(build_router(state)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{route_address}/v1/responses"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.bytes().await.unwrap(),
+        Bytes::from_static(b"delayed-body")
+    );
+
+    route_task.abort();
+    upstream_task.abort();
 }

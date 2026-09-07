@@ -29,6 +29,7 @@ use crate::{
 };
 
 pub const DEFAULT_ROUTE_PORT: u16 = 16_729;
+const DEFAULT_UPSTREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Runtime status for an embedded route server.
 ///
@@ -174,6 +175,7 @@ pub struct RouteState {
     pub(crate) store: Arc<ProviderStore>,
     pub(crate) provider_id: Option<String>,
     pub(crate) client: reqwest::Client,
+    upstream_header_timeout: Duration,
     scan_config: Option<ScanConfig>,
 }
 
@@ -189,8 +191,18 @@ impl RouteState {
             store,
             provider_id,
             client,
+            upstream_header_timeout: DEFAULT_UPSTREAM_HEADER_TIMEOUT,
             scan_config: None,
         })
+    }
+
+    /// Override the response-header timeout for a route instance.
+    ///
+    /// This is primarily useful to keep deterministic tests fast; the normal
+    /// constructors use [`DEFAULT_UPSTREAM_HEADER_TIMEOUT`].
+    pub fn with_upstream_header_timeout(mut self, timeout: Duration) -> Self {
+        self.upstream_header_timeout = timeout;
+        self
     }
 
     pub fn with_scan_config(
@@ -316,6 +328,8 @@ pub enum RouteRequestError {
     RequestBody,
     #[error("upstream request failed")]
     Upstream,
+    #[error("upstream did not start responding in time")]
+    UpstreamTimeout,
 }
 
 #[derive(Debug, Error)]
@@ -434,6 +448,13 @@ pub fn filter_request_headers(
 /// Extract the stable session identity fields used by Codex Responses clients.
 /// `previous_response_id` is a response-chain cursor, not a session ID.
 pub fn extract_codex_session_id(headers: &HeaderMap, body: &Value) -> Option<String> {
+    if let Some(session_id) = body
+        .get("client_metadata")
+        .and_then(|metadata| metadata.get("x-codex-turn-metadata"))
+        .and_then(extract_turn_metadata_session_id)
+    {
+        return Some(session_id);
+    }
     for header_name in ["session_id", "x-session-id"] {
         if let Some(value) = headers
             .get(header_name)
@@ -447,6 +468,20 @@ pub fn extract_codex_session_id(headers: &HeaderMap, body: &Value) -> Option<Str
     }
     body.get("metadata")
         .and_then(|metadata| metadata.get("session_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn extract_turn_metadata_session_id(value: &Value) -> Option<String> {
+    let metadata = match value {
+        Value::Object(_) => value.clone(),
+        Value::String(encoded) => serde_json::from_str::<Value>(encoded).ok()?,
+        _ => return None,
+    };
+    metadata
+        .get("session_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -681,14 +716,18 @@ async fn forward_endpoint(
     let (base_url, credential) = provider_configuration(&provider)?;
     let url = upstream_endpoint_url(&base_url, endpoint, parts.uri.query())?;
     let headers = filter_request_headers(&parts.headers, Some(&credential))?;
-    let upstream = state
-        .client
-        .post(url)
-        .headers(headers)
-        .body(request_body)
-        .send()
-        .await
-        .map_err(|_| RouteRequestError::Upstream)?;
+    let upstream = tokio::time::timeout(
+        state.upstream_header_timeout,
+        state
+            .client
+            .post(url)
+            .headers(headers)
+            .body(request_body)
+            .send(),
+    )
+    .await
+    .map_err(|_| RouteRequestError::UpstreamTimeout)?
+    .map_err(|_| RouteRequestError::Upstream)?;
 
     let status = upstream.status();
     let upstream_headers = upstream.headers().clone();
@@ -805,6 +844,11 @@ fn route_error_response(error: RouteRequestError) -> Response<Body> {
             StatusCode::BAD_GATEWAY,
             "upstream_unavailable",
             "upstream request failed",
+        ),
+        RouteRequestError::UpstreamTimeout => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "upstream_timeout",
+            "upstream did not start responding in time",
         ),
     };
     (

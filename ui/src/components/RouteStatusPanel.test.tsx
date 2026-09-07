@@ -109,7 +109,28 @@ describe("RouteStatusPanel", () => {
     expect(panel.classList.contains("route-control-strip--external-modified")).toBe(true);
     expect(screen.getByRole("status").textContent).toContain("External modification");
     expect(screen.getByRole("alert").textContent).toContain(
-      "Codex config changed outside Codex Route. Deactivation is blocked to protect it.",
+      "Codex config changed outside Codex Route. Stopping Route preserves the external configuration.",
     );
+  });
+
+  it("allows releasing stale protected state when the listener is gone", async () => {
+    const onDeactivate = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <RouteStatusPanel
+        status={{ ...externallyModifiedStatus, active: false, serverReachable: false }}
+        port="16729"
+        busy={false}
+        canActivate={true}
+        onPortChange={vi.fn()}
+        onActivate={vi.fn()}
+        onDeactivate={onDeactivate}
+      />,
+    );
+
+    const deactivate = screen.getByRole("button", { name: "Deactivate" });
+    expect(deactivate).toHaveProperty("disabled", false);
+    await user.click(deactivate);
+    expect(onDeactivate).toHaveBeenCalledOnce();
   });
 });
